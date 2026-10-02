@@ -195,12 +195,23 @@ function loadMasterCsv(rows){
 function businessTables(){ return Object.keys(config.reportViews).sort(); }
 
 // Columns available for a BUSINESS table name (a reportViews key), looked
-// up via the sync filename it maps to. Empty when master.csv isn't loaded
-// or the mapped filename was never synced -- callers fall back to a free
-// text input in that case instead of a dropdown.
+// up via the sync filename it maps to. Falls back to just ["id"] when
+// master.csv isn't loaded or the mapped filename was never synced -- that
+// one column is always real regardless (see below), so callers only need
+// a free-text fallback for anything beyond it.
+//
+// "id" is force-added to every table by sppDataSync.js's own
+// ALWAYS_INCLUDED_SPP_FIELDS, regardless of whether a row for it exists in
+// master.csv -- so it's a real column on every synced table, just one that
+// master.csv itself never has to list. Every column picker needs it
+// available (not just Relationships' target column, where it's the most
+// common case, but Date columns and Field values could legitimately
+// reference it too), so it's added once here rather than special-cased
+// per tab.
 function columnsFor(businessName){
   const local = config.reportViews[businessName];
-  return (local && masterColumns[local]) ? masterColumns[local] : [];
+  const cols = (local && masterColumns[local]) ? masterColumns[local] : [];
+  return cols.includes("id") ? cols : ["id", ...cols];
 }
 
 // ---- validation ----------------------------------------------------------

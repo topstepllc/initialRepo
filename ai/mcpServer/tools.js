@@ -293,8 +293,24 @@ function registerTools(server, connection, timings, email, hasSyncedAccess) {
         "-- convert or use a pattern match accordingly. A column with a " +
         "\"references\" property from get_spp_schemas is a foreign key: " +
         "join to the referenced table/column to filter or display by name " +
-        "rather than filtering the ID column against a text value. Only " +
-        "SELECT statements are permitted.",
+        "rather than filtering the ID column against a text value. The " +
+        "approvalLines table holds one row per EVENT in an approval " +
+        "workflow, not one row per approved record -- which record a row " +
+        "is about is given by whichever type-specific *_id column is " +
+        "populated (e.g. envelope_id, invoice_id, timesheet_id, " +
+        "schedule_request_id); exactly one of these is set per row, " +
+        "matching that row's record type, and every other record-type id " +
+        "column on that row is blank. Its \"action\" column marks the " +
+        "event: \"S\" is the original submission, \"P\" is a pending " +
+        "approval still owed by the user named in that row's userid, " +
+        "\"A\" is a granted approval, \"R\" is a rejection. A \"P\" row is " +
+        "never replaced once its approver acts -- it stays, with its " +
+        "pending_done field set to \"1\"; the actual outcome is recorded " +
+        "separately, as a new \"A\" or \"R\" row. So \"who still needs to " +
+        "approve schedule request 1234\" means rows where " +
+        "schedule_request_id = 1234, action = 'P', and pending_done is " +
+        "not '1' -- each such row's userid is a still-outstanding " +
+        "approver. Only SELECT statements are permitted.",
       inputSchema: { sql: z.string().describe("A single read-only SELECT statement.") },
     },
     wrapToolHandler(async ({ sql }) => {

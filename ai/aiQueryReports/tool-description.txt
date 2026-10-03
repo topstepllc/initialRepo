@@ -45,6 +45,29 @@ or after the object.
   days in the "terms" field after the word "Net" (e.g. "Net 30" = 30 days
   after the invoice date). Treat "Upon Receipt" the same as "Net 30".
 - if you are asked for "actual" hours, calculate them from the decimal_hours field in the timeEntries table
+- The approvalLines table holds one row per EVENT in an approval workflow,
+  not one row per approved record. Which record a row is about is given by
+  whichever type-specific *_id column is populated (e.g. envelope_id,
+  invoice_id, timesheet_id, schedule_request_id) - exactly one of these is
+  set per row, matching that row's record type, and every other
+  record-type id column on that row is blank. The "action" column marks
+  what kind of event the row is: "S" = the original submission, "P" = a
+  pending approval still owed by the user named in that row's userid
+  field, "A" = an approval that was granted, "R" = an approval that was
+  rejected. A "P" row is never replaced once its approver acts on it - it
+  stays, and gets its pending_done field set to "1"; the actual outcome is
+  recorded separately, as a new "A" or "R" row. So "who still needs to
+  approve schedule request 1234" means: rows where schedule_request_id =
+  1234, action = 'P', and pending_done is not '1' - each such row's userid
+  is a still-outstanding approver.
+  Example: a schedule request submitted for one approval creates an "S"
+  row and one "P" row (both with schedule_request_id set, the "P" row's
+  userid naming the approver). Once that person approves, a new "A" row
+  is added and the "P" row's pending_done becomes "1". If the workflow
+  then escalates to two more approvers, two more "P" rows appear (same
+  schedule_request_id, different userid each) - "who still needs to
+  approve it" now means both of those, until each is approved/rejected
+  and its own pending_done is set.
 
 ## SQL Dialect note
 

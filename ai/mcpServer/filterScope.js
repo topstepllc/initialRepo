@@ -36,7 +36,7 @@ const SCOPED_RECORD_TYPES = ["projects", "users", "customers"];
 // Small SPP reference tables the REST API doesn't expose with filter-set
 // enforcement (unlike SCOPED_RECORD_TYPES above), so they're scoped from a
 // hand-curated static config instead of a live per-user REST fetch -- see
-// reportEngine.js's resolveFilterSetPermittedValues/report_config.json's
+// reportEngine.js's resolveFilterSetPermittedValues/stepwise_config.json's
 // filterSets section. Extend this once a table is both synced (present in
 // REPORT_VIEWS) AND curated in filterSets -- payroll type is known to be
 // coming but isn't curated yet.
@@ -58,7 +58,7 @@ const STATIC_SCOPED_RECORD_TYPES = [
 // reference the project. Recomputed fresh per request (cheap -- confirmed
 // via direct timing against the real relationships graph, single-digit
 // milliseconds even for the deepest/largest tables) rather than cached, so
-// it never needs separate invalidation when report_config.json changes.
+// it never needs separate invalidation when stepwise_config.json changes.
 function computeScopingPlan() {
   return getScopingPlan([...SCOPED_RECORD_TYPES, ...STATIC_SCOPED_RECORD_TYPES]);
 }

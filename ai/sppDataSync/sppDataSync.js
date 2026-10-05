@@ -96,8 +96,10 @@ async function setupDuckDB(region) {
 
 // --- Master config -----------------------------------------------------
 
-// Reads spp-data/{company}/_config/master.csv and groups rows by
+// Reads spp-data/{company}/_config/stepwise_mapping.csv and groups rows by
 // localTable. Each group: { sppType, fields: [{sppField, subKey, csvField}] }.
+// (Renamed from master.csv -- same file, same shape, just the Stepwise
+// branding naming convention.)
 //
 // sppField may carry a dotted sub-path (e.g. "addr.city") to pull one named
 // piece out of a compound field -- SPP always returns the WHOLE nested
@@ -108,7 +110,7 @@ async function setupDuckDB(region) {
 // A plain sppField with no dot (subKey undefined) is unaffected by this --
 // same single string as before, same flattenFieldValue call site.
 async function readMasterConfig(connection, company) {
-  const path = s3Path(company, "_config", "master.csv");
+  const path = s3Path(company, "_config", "stepwise_mapping.csv");
   const reader = await connection.runAndReadAll(
     `SELECT company, localTable, sppType, sppField, csvField FROM read_csv_auto('${path}', header=true);`,
   );
@@ -333,8 +335,8 @@ function flattenFieldValue(value) {
 // hardcoded since other compound field types may wrap under a different
 // name) and returns that one sub-value. Entirely separate from, and never
 // called in place of, flattenFieldValue -- a field with no subKey (every
-// master.csv row before this feature, and every date field regardless)
-// still goes through flattenFieldValue exactly as before.
+// stepwise_mapping.csv row before this feature, and every date field
+// regardless) still goes through flattenFieldValue exactly as before.
 function extractSubFieldValue(value, subKey) {
   if (value === null || value === undefined) return value;
   if (typeof value !== "object") return String(value);
@@ -890,7 +892,7 @@ exports.handler = async (event, context) => {
   const {
     integrationKey, // e.g. "spp-top step-prod" -- picks the exact oauth_config/oauth_tokens row. Not derived from `company` -- see the README note on why.
     instance, // "sandbox" | "production" | "demo" -- picks which SPP XML endpoint/API key to use
-    company, // which spp-data/{company}/_config/master.csv to read
+    company, // which spp-data/{company}/_config/stepwise_mapping.csv to read
     table, // optional -- sync just this one localTable instead of every table in the master config
   } = event;
 

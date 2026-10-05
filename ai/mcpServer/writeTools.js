@@ -14,7 +14,7 @@ const sppWriteClient = require("./sppWriteClient.js");
 const sppWriteStore = require("./sppWriteStore.js");
 const masterConfig = require("./masterConfig.js");
 
-// Covers every table this company's report_config.json declares (via
+// Covers every table this company's stepwise_config.json declares (via
 // reportEngine.getAllViewNames(), read fresh per request in
 // registerWriteTools below) -- not a hardcoded list. Role permission +
 // row-visibility + the small global restriction list in sppWriteClient.js
@@ -274,7 +274,7 @@ async function doExecuteSppWrite(connection, email, { proposalToken }) {
   const company = process.env.SPP_INSTANCE_NAME;
   const fieldMap = await masterConfig.getMasterFieldMapForView(connection, company, table, reportEngine.getSourceFile);
   if (!fieldMap) {
-    const reason = `No SPP field mapping found for "${table}" -- check master.csv/report_config.json.`;
+    const reason = `No SPP field mapping found for "${table}" -- check stepwise_mapping.csv/stepwise_config.json.`;
     await sppWriteStore.markRejectedByUs(proposalToken, reason);
     logWriteOutcome("execute_spp_write", "rejected_by_us", { email, table, action, recordId, detail: reason });
     return { status: "rejected_by_us", recordId: null, sppResponse: null, message: reason };
@@ -367,7 +367,7 @@ async function doExecuteSppWrite(connection, email, { proposalToken }) {
 function registerWriteTools(server, connection, email, wrapToolHandler) {
   // Read fresh per request (this function runs once per MCP request, same
   // as every other tool registration) -- whatever this company's
-  // report_config.json currently declares as synced tables IS the writable
+  // stepwise_config.json currently declares as synced tables IS the writable
   // table list, no separate hardcoded list to keep in sync.
   const writableTables = reportEngine.getAllViewNames();
 

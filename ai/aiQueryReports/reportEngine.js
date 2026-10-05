@@ -1,6 +1,7 @@
 // The DuckDB-based SPP reporting engine: materializes the S3-synced CSVs
 // (see sppDataSync.js) into in-memory tables per this company's
-// report_config.json (see loadReportConfig below), and answers schema/
+// stepwise_config.json (renamed from report_config.json -- same file, same
+// shape; see loadReportConfig below), and answers schema/
 // query/field-value requests against them. Deployed both as its own
 // Lambda (aiQueryReports) and reused as-is (via ai/mcpServer/Dockerfile's
 // COPY, and tools.js's require("./reportEngine.js")) inside sppMcpServer,
@@ -42,7 +43,7 @@ console.log("basePath: " + basePath);
 // fix or improvement had to be applied N times across N copies. They're
 // loaded at runtime instead, from this company's own S3 config file (see
 // loadReportConfig below) -- this file is now identical across every
-// customer; only spp-data/{company}/_config/report_config.json differs.
+// customer; only spp-data/{company}/_config/stepwise_config.json differs.
 // FIELD_VALUES used to be its own folder (_field-values/{viewName}.json,
 // one lazily-fetched-and-cached S3 object per table) -- folded in here
 // instead, since it's exactly the same kind of small, per-customer,
@@ -60,8 +61,8 @@ let FIELD_VALUES = {};
 // request via a cached per-user REST fetch (see ai/mcpServer/filterScope.js
 // and sppRestClient.js), these tables are static enough that a hand-
 // reviewed config is the right source of truth instead of a live SPP call.
-// Missing/empty (section not present yet, or report_config.json itself not
-// loaded) is treated as "nothing curated yet", not an error -- every
+// Missing/empty (section not present yet, or stepwise_config.json itself
+// not loaded) is treated as "nothing curated yet", not an error -- every
 // static-scoped table just fails closed (permits nothing) until real data
 // exists here, rather than this Lambda refusing to start.
 let FILTER_SETS = {};
@@ -75,11 +76,11 @@ let ROLE_PERMISSIONS = {};
 // reportViews' raw pre-transform mapping (viewName -> bare SPP-side source
 // file name, e.g. "timeEntries" -> "task"), kept alongside REPORT_VIEWS
 // (which rewrites those same values into full S3 paths) since the write
-// path needs the bare name to look up master.csv's field mapping and the
-// SPP XML recordType, not an S3 path.
+// path needs the bare name to look up stepwise_mapping.csv's field mapping
+// and the SPP XML recordType, not an S3 path.
 let SOURCE_FILES = {};
 
-const REPORT_CONFIG_PATH = `${basePath}/_config/report_config.json`;
+const REPORT_CONFIG_PATH = `${basePath}/_config/stepwise_config.json`;
 
 // --- Connection + materialization caching ---------------------------------
 //
@@ -212,7 +213,7 @@ async function loadReportConfig(connection) {
   const rows = await reader.getRowObjects();
   if (!rows.length || !rows[0].content) {
     throw new Error(
-      `report_config.json not found or empty at ${REPORT_CONFIG_PATH}`,
+      `stepwise_config.json not found or empty at ${REPORT_CONFIG_PATH}`,
     );
   }
 
@@ -221,7 +222,7 @@ async function loadReportConfig(connection) {
     parsed = JSON.parse(rows[0].content);
   } catch (error) {
     throw new Error(
-      `report_config.json at ${REPORT_CONFIG_PATH} is not valid JSON: ${error.message}`,
+      `stepwise_config.json at ${REPORT_CONFIG_PATH} is not valid JSON: ${error.message}`,
     );
   }
 
@@ -231,7 +232,7 @@ async function loadReportConfig(connection) {
     Object.keys(parsed.reportViews).length === 0
   ) {
     throw new Error(
-      `report_config.json at ${REPORT_CONFIG_PATH} is missing a non-empty "reportViews" section`,
+      `stepwise_config.json at ${REPORT_CONFIG_PATH} is missing a non-empty "reportViews" section`,
     );
   }
 
@@ -253,7 +254,7 @@ async function loadReportConfig(connection) {
   ROLE_PERMISSIONS = parsed.rolePermissions ?? {};
 
   console.log(
-    `Loaded report_config.json: ${Object.keys(REPORT_VIEWS).length} views, ${Object.keys(FILTER_SETS).length} filter set(s), ${Object.keys(ROLE_PERMISSIONS).length} role(s) with write permissions`,
+    `Loaded stepwise_config.json: ${Object.keys(REPORT_VIEWS).length} views, ${Object.keys(FILTER_SETS).length} filter set(s), ${Object.keys(ROLE_PERMISSIONS).length} role(s) with write permissions`,
   );
 }
 
@@ -266,7 +267,7 @@ async function getConfigLastModified() {
     return head.LastModified ? head.LastModified.toISOString() : "unknown";
   } catch (error) {
     console.log(
-      `HeadObject failed for report_config.json (${REPORT_CONFIG_PATH}): ${error.message}`,
+      `HeadObject failed for stepwise_config.json (${REPORT_CONFIG_PATH}): ${error.message}`,
     );
     return null;
   }
@@ -281,7 +282,7 @@ let lastConfigModified = null;
 //   null         -- fail closed (no filter set, unknown filter set, table
 //                    not curated for this filter set, or explicit "none")
 // The exhaustiveness the config format requires (every table listed for
-// every filter set, per report_config.json's filterSets section design)
+// every filter set, per stepwise_config.json's filterSets section design)
 // means a missing table key here is itself a sign the config is incomplete
 // or hasn't caught up to a newly-added table yet -- null/fail-closed is the
 // only safe response, same as every other "not sure" case in this function.
@@ -335,14 +336,15 @@ function resolveRolePermission(roleId, table, action) {
 }
 
 // Bare SPP-side source file/table name for a view (e.g. "task" for
-// "timeEntries") -- the write path needs this to look up master.csv's field
-// mapping and the SPP XML recordType; REPORT_VIEWS itself only holds the
-// already-expanded S3 path. Returns null for an unknown view.
+// "timeEntries") -- the write path needs this to look up
+// stepwise_mapping.csv's field mapping and the SPP XML recordType;
+// REPORT_VIEWS itself only holds the already-expanded S3 path. Returns null
+// for an unknown view.
 function getSourceFile(viewName) {
   return SOURCE_FILES[viewName] ?? null;
 }
 
-// Date-typed column names for a view, as curated in report_config.json's
+// Date-typed column names for a view, as curated in stepwise_config.json's
 // dateColumns section -- the write path uses this to decide which fields
 // need SPP's nested <Date><year>/<month>/<day></Date> XML wrapping instead
 // of a plain text value. Always an array, never undefined.
@@ -350,7 +352,7 @@ function getDateColumns(viewName) {
   return DATE_COLUMNS[viewName] ?? [];
 }
 
-// Every view this company's report_config.json declares -- the write path
+// Every view this company's stepwise_config.json declares -- the write path
 // uses this to build its table enum dynamically per company/request rather
 // than hardcoding a table list in code, so a company's actual synced table
 // set is always the authority on what's writable-by-name, with no code
@@ -405,7 +407,7 @@ function getRelationshipsForTable(table) {
 // that's not in REPORT_VIEWS at all (typo, or a table dropped since) is
 // silently skipped rather than crashing table materialization. Confirmed
 // via direct testing that the real relationships graph has no cycles, but
-// that's not something to trust blindly forever as report_config.json
+// that's not something to trust blindly forever as stepwise_config.json
 // keeps changing -- a genuine cycle among the remaining tables breaks it by
 // placing them with no cascade conditions (their own base restriction, if
 // any, still applies) and logging a warning, rather than looping forever.
@@ -764,13 +766,13 @@ async function setupConnection(region, timings, { forceStalenessCheck = false } 
     lastStalenessCheckAt = now;
 
     if (currentConfigModified !== null && currentConfigModified !== lastConfigModified) {
-      // The company's report_config.json itself changed -- the SET of
+      // The company's stepwise_config.json itself changed -- the SET of
       // tables could be different now (one added, one removed), not just
       // individual CSVs, so this reloads the config and re-materializes
       // everything currently in it, same as a cold start does, rather
       // than trying to diff the old table set against the new one.
       console.log(
-        "report_config.json changed in S3 -- reloading config and re-materializing everything",
+        "stepwise_config.json changed in S3 -- reloading config and re-materializing everything",
       );
       const tReload0 = Date.now();
       await loadReportConfig(cachedConnection);
@@ -1460,7 +1462,7 @@ Object.assign(exports, {
   resolveFilterSetPermittedValues,
   // Same reasoning as resolveFilterSetPermittedValues above -- reads
   // RELATIONSHIPS/REPORT_VIEWS live rather than being handed a
-  // point-in-time copy, so it stays correct across a report_config.json
+  // point-in-time copy, so it stays correct across a stepwise_config.json
   // reload without filterScope.js needing to know or care.
   getScopingPlan,
   // Consumed by ai/mcpServer/sppWritePermissions.js (role-based write

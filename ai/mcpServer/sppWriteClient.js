@@ -18,7 +18,7 @@ const lambdaClient = new LambdaClient({});
 // Small, hardcoded, GLOBAL (not per-company) platform-capability
 // EXCEPTIONS -- a table SPP's own API restricts regardless of role, a
 // platform constraint rather than something that varies by customer, so
-// hardcoded here rather than curated per-company in report_config.json.
+// hardcoded here rather than curated per-company in stepwise_config.json.
 // Every table defaults to fully permitted (create/update/delete); an entry
 // here overrides just the actions it explicitly sets to false. Confirmed
 // with the user (2026-09-27): revenueRecognitionTransactions is the only

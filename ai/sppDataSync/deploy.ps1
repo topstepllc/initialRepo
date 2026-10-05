@@ -14,7 +14,8 @@ $ImageUri = "$RegistryHost/$RepoName`:latest"
 $FunctionNames = @(
   "sppDataSync",
   "sppDataSync-bgb",
-  "sppDataSync-rbreaux-2f4b"
+  "sppDataSync-rbreaux-2f4b",
+  "sppDataSync-med-learning-group-llc"
 )
 
 # Native commands (docker, aws) don't throw on failure in PowerShell --

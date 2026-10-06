@@ -45,6 +45,8 @@ const {
   getScopingPlan,
   getAllViewNames,
   resolveRolePermission,
+  performExecuteQuery,
+  ToolInputError,
 } = require("./reportEngine.js");
 
 const SCOPED_RECORD_TYPES = ["projects", "users", "customers"];
@@ -341,9 +343,47 @@ function rowScopedSource(table) {
     : `${table}_raw`;
 }
 
+// Every table's real data lives under "<name>_raw" (and row-scoped data
+// under "<name>_scoped"), with only "<name>" exposed -- and only for tables
+// the caller's role can read. Those internal names live in the same DuckDB
+// connection the model's SQL runs against, so without this a query could
+// name them directly and bypass both role visibility and row scoping.
+// DuckDB also volunteers them unprompted: a query against a hidden table
+// fails with "did you mean <name>_raw?", which performExecuteQuery's own
+// error handling tells the model to act on. So: reject any SQL that names
+// one, and scrub them from any error text passed back. Every model-supplied
+// SQL statement (execute_spp_query, propose_spp_batch_write's sql) goes
+// through this, never performExecuteQuery directly.
+function internalNamePattern() {
+  const names = getAllViewNames().flatMap((name) => [`${name}_raw`, `${name}_scoped`]);
+  if (names.length === 0) return null;
+  const escaped = names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(`\\b(${escaped.join("|")})\\b`, "gi");
+}
+
+async function executeScopedQuery(connection, sql, timings) {
+  const pattern = internalNamePattern();
+  if (pattern && pattern.test(sql)) {
+    console.log(`Rejected query: referenced an internal table name. SQL: ${sql}`);
+    throw new ToolInputError(
+      "That table is not available. Use only the table names returned by get_spp_schemas.",
+    );
+  }
+  try {
+    return await performExecuteQuery(connection, sql, timings);
+  } catch (error) {
+    if (pattern) {
+      pattern.lastIndex = 0;
+      error.message = error.message.replace(pattern, "[unavailable]");
+    }
+    throw error;
+  }
+}
+
 module.exports = {
   applyFilterScope,
   rowScopedSource,
+  executeScopedQuery,
   SCOPED_RECORD_TYPES,
   STATIC_SCOPED_RECORD_TYPES,
   // Consumed by ai/mcpServer/sppWritePermissions.js for role-based write

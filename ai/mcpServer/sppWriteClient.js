@@ -104,6 +104,20 @@ function buildModifyXml({ apiKey, accessToken, sppType, recordId, fields, csvFie
   return wrapEnvelope(apiKey, accessToken, action);
 }
 
+// One request carrying one <Modify> command per record, all setting the
+// same field values -- the same multi-command envelope shape
+// tslib-putRecords already sends in production for its array writeObj.
+function buildBatchModifyXml({ apiKey, accessToken, sppType, recordIds, fields, csvFieldToSppField, dateColumns }) {
+  const sharedFieldsXml = buildFieldsXml(fields, csvFieldToSppField, dateColumns);
+  const commands = recordIds
+    .map(
+      (recordId) =>
+        `<Modify type="${sppType}" enable_custom="1"><${sppType}><id>${escapeXml(recordId)}</id>${sharedFieldsXml}</${sppType}></Modify>`,
+    )
+    .join("\n  ");
+  return wrapEnvelope(apiKey, accessToken, commands);
+}
+
 function buildDeleteXml({ apiKey, accessToken, sppType, recordId }) {
   const action = `<Delete type="${sppType}"><${sppType}><id>${escapeXml(recordId)}</id></${sppType}></Delete>`;
   return wrapEnvelope(apiKey, accessToken, action);
@@ -178,12 +192,17 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function sendXmlRequest(xmlUrl, xml, { action, sppType }) {
+// Posts one XML request and returns { responseNode, text }, retrying only
+// the bare auth-layer failure shape described above (no Add/Modify/Delete
+// child at all). Throws SppWriteRejectedError for a non-2xx, an unparseable
+// body, or a missing <response>; a bare auth-layer failure that's still
+// failing on the last attempt is returned as-is for the caller to reject.
+async function postXml(xmlUrl, xml, label) {
   const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "@_" });
 
   for (let attempt = 1; attempt <= TRANSIENT_RETRY_ATTEMPTS; attempt++) {
     console.log(
-      `SPP XML write request (attempt ${attempt}/${TRANSIENT_RETRY_ATTEMPTS}, action=${action}, sppType=${sppType}, url=${xmlUrl}): ${redactXmlForLogging(xml)}`,
+      `SPP XML write request (attempt ${attempt}/${TRANSIENT_RETRY_ATTEMPTS}, ${label}, url=${xmlUrl}): ${redactXmlForLogging(xml)}`,
     );
 
     const response = await fetch(xmlUrl, {
@@ -194,7 +213,7 @@ async function sendXmlRequest(xmlUrl, xml, { action, sppType }) {
     const text = await response.text();
 
     console.log(
-      `SPP XML write response (attempt ${attempt}/${TRANSIENT_RETRY_ATTEMPTS}, action=${action}, sppType=${sppType}, httpStatus=${response.status}): ${text}`,
+      `SPP XML write response (attempt ${attempt}/${TRANSIENT_RETRY_ATTEMPTS}, ${label}, httpStatus=${response.status}): ${text}`,
     );
 
     if (!response.ok) {
@@ -213,13 +232,6 @@ async function sendXmlRequest(xmlUrl, xml, { action, sppType }) {
       throw new SppWriteRejectedError(`Unexpected SPP response shape: ${text}`, text);
     }
 
-    const successNode =
-      action === "create" ? responseNode.Add?.[sppType] : action === "update" ? responseNode.Modify?.[sppType] : responseNode.Delete;
-
-    if (successNode !== undefined) {
-      return successNode;
-    }
-
     const isBareAuthLayerFailure =
       responseNode.Add === undefined && responseNode.Modify === undefined && responseNode.Delete === undefined;
 
@@ -229,9 +241,64 @@ async function sendXmlRequest(xmlUrl, xml, { action, sppType }) {
       continue;
     }
 
-    const errorDetail = responseNode["#text"] ?? responseNode["@_status"] ?? JSON.stringify(responseNode);
-    throw new SppWriteRejectedError(`SPP rejected the request: ${errorDetail}`, text);
+    return { responseNode, text };
   }
+}
+
+function describeResponseError(responseNode) {
+  return responseNode["#text"] ?? responseNode["@_status"] ?? JSON.stringify(responseNode);
+}
+
+async function sendXmlRequest(xmlUrl, xml, { action, sppType }) {
+  const { responseNode, text } = await postXml(xmlUrl, xml, `action=${action}, sppType=${sppType}`);
+
+  const successNode =
+    action === "create" ? responseNode.Add?.[sppType] : action === "update" ? responseNode.Modify?.[sppType] : responseNode.Delete;
+
+  if (successNode !== undefined) {
+    return successNode;
+  }
+
+  throw new SppWriteRejectedError(`SPP rejected the request: ${describeResponseError(responseNode)}`, text);
+}
+
+// Sends a buildBatchModifyXml request and returns one outcome per record,
+// in the same order as recordIds: { recordId, ok: true } or
+// { recordId, ok: false, error }. SPP answers a multi-command request with
+// one <Modify> element per command, in command order, each carrying its own
+// status -- a record SPP rejects (bad value, locked record) doesn't affect
+// the others. Throws SppWriteRejectedError when the response as a whole
+// can't be trusted (auth-layer failure, or a Modify count that doesn't
+// match what was sent) -- in that case NOTHING about which records applied
+// is knowable from the response, so the caller must stop rather than guess.
+async function sendBatchModifyRequest(xmlUrl, xml, { sppType, recordIds }) {
+  const { responseNode, text } = await postXml(
+    xmlUrl,
+    xml,
+    `action=batch-update, sppType=${sppType}, records=${recordIds.length}`,
+  );
+
+  if (responseNode.Modify === undefined) {
+    throw new SppWriteRejectedError(`SPP rejected the request: ${describeResponseError(responseNode)}`, text);
+  }
+
+  const modifyNodes = Array.isArray(responseNode.Modify) ? responseNode.Modify : [responseNode.Modify];
+  if (modifyNodes.length !== recordIds.length) {
+    throw new SppWriteRejectedError(
+      `SPP returned ${modifyNodes.length} result(s) for ${recordIds.length} record(s) -- cannot tell which applied.`,
+      text,
+    );
+  }
+
+  return modifyNodes.map((node, index) => {
+    const recordId = recordIds[index];
+    const status = typeof node === "object" && node !== null ? node["@_status"] : undefined;
+    const record = typeof node === "object" && node !== null ? node[sppType] : undefined;
+    if (record !== undefined && (status === undefined || String(status) === "0")) {
+      return { recordId, ok: true };
+    }
+    return { recordId, ok: false, error: `SPP status ${status ?? "unknown"}: ${typeof node === "object" ? JSON.stringify(node) : String(node)}`.slice(0, 300) };
+  });
 }
 
 let cachedCredentials = null;
@@ -295,7 +362,9 @@ module.exports = {
   buildAddXml,
   buildModifyXml,
   buildDeleteXml,
+  buildBatchModifyXml,
   sendXmlRequest,
+  sendBatchModifyRequest,
   SppWriteRejectedError,
   getSppCredentials,
   triggerResync,

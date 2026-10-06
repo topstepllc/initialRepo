@@ -67,10 +67,11 @@ let FIELD_VALUES = {};
 // exists here, rather than this Lambda refusing to start.
 let FILTER_SETS = {};
 
-// Per-role CRUD write permissions, keyed by role id (string) -- see
+// Per-role CRUD permissions (read gates table visibility on the MCP path;
+// create/update/delete gate writes), keyed by role id (string) -- see
 // resolveRolePermission below. Same "missing means fail closed" philosophy
 // as FILTER_SETS: an un-curated role or table permits nothing rather than
-// this Lambda refusing to start or silently allowing a write.
+// this Lambda refusing to start or silently allowing access.
 let ROLE_PERMISSIONS = {};
 
 // reportViews' raw pre-transform mapping (viewName -> bare SPP-side source
@@ -254,7 +255,7 @@ async function loadReportConfig(connection) {
   ROLE_PERMISSIONS = parsed.rolePermissions ?? {};
 
   console.log(
-    `Loaded stepwise_config.json: ${Object.keys(REPORT_VIEWS).length} views, ${Object.keys(FILTER_SETS).length} filter set(s), ${Object.keys(ROLE_PERMISSIONS).length} role(s) with write permissions`,
+    `Loaded stepwise_config.json: ${Object.keys(REPORT_VIEWS).length} views, ${Object.keys(FILTER_SETS).length} filter set(s), ${Object.keys(ROLE_PERMISSIONS).length} role(s) in rolePermissions`,
   );
 }
 
@@ -312,14 +313,16 @@ function resolveFilterSetPermittedValues(filterSetId, table) {
   return null;
 }
 
-// Resolves whether a given SPP role may perform a given write action
-// (create/update/delete -- "read" is also present in the data but this
-// pipeline enforces read-visibility separately via filter sets, not role
-// permissions) on a given table, from the already-loaded ROLE_PERMISSIONS.
-// Same fail-closed philosophy as resolveFilterSetPermittedValues: no role
-// id, an unknown role, a table not curated for that role, or anything other
-// than a literal 1 all deny -- an incomplete or stale rolePermissions
-// section must never silently grant a write.
+// Resolves whether a given SPP role may perform a given action (read/
+// create/update/delete) on a given table, from the already-loaded
+// ROLE_PERMISSIONS. "read" gates table visibility on the MCP path
+// (ai/mcpServer/filterScope.js hides any table the role can't read, on top
+// of filter-set row scoping) and is also required for every write; this
+// Lambda's own direct path doesn't consult it. Same fail-closed philosophy
+// as resolveFilterSetPermittedValues: no role id, an unknown role, a table
+// not curated for that role, or anything other than a literal 1 all deny --
+// an incomplete or stale rolePermissions section must never silently grant
+// access.
 function resolveRolePermission(roleId, table, action) {
   if (roleId === null || roleId === undefined || roleId === "") {
     return false;
@@ -1509,9 +1512,18 @@ function cleanRows(rows) {
 }
 
 async function getTableSchema(connection, viewName) {
-  const reader = await connection.runAndReadAll(
-    `SELECT * FROM ${viewName} LIMIT 0;`,
-  );
+  // Introspects "<name>_raw" when it exists (ai/mcpServer's filterScope.js
+  // renames every table to that and only re-exposes "<name>" to callers
+  // whose role can read it) -- the schema is cached across callers, so it
+  // must not depend on whether the request that happened to compute it
+  // could see the table. Same columns either way; falls back to the plain
+  // name for this Lambda's own direct path, where nothing is ever renamed.
+  let reader;
+  try {
+    reader = await connection.runAndReadAll(`SELECT * FROM "${viewName}_raw" LIMIT 0;`);
+  } catch {
+    reader = await connection.runAndReadAll(`SELECT * FROM ${viewName} LIMIT 0;`);
+  }
   const rawColumns = reader.columnNameAndTypeObjectsJson();
 
   return rawColumns.map((col) => {

@@ -364,12 +364,23 @@ async function doExecuteSppWrite(connection, email, { proposalToken }) {
   return { status: "executed", recordId: resultRecordId, sppResponse: resultNode, message: `${action} succeeded.` };
 }
 
-function registerWriteTools(server, connection, email, wrapToolHandler) {
+function registerWriteTools(server, connection, email, readableTables, wrapToolHandler) {
   // Read fresh per request (this function runs once per MCP request, same
   // as every other tool registration) -- whatever this company's
   // stepwise_config.json currently declares as synced tables IS the writable
-  // table list, no separate hardcoded list to keep in sync.
-  const writableTables = reportEngine.getAllViewNames();
+  // table list, no separate hardcoded list to keep in sync. Narrowed to the
+  // tables this caller's role can read (see filterScope.js) so a hidden
+  // table's name never shows up in this tool's input schema; a write still
+  // has to pass checkAllLayers' own read + write checks either way.
+  const writableTables = reportEngine
+    .getAllViewNames()
+    .filter((table) => readableTables.includes(table));
+
+  // z.enum needs at least one value -- a caller who can't read anything
+  // can't write anything either, so there's nothing to offer.
+  if (writableTables.length === 0) {
+    return;
+  }
 
   server.registerTool(
     "propose_spp_write",

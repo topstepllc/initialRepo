@@ -157,7 +157,7 @@ async function handleMcpRequest(event) {
       JSON.stringify(claims),
     );
   }
-  const { hasSyncedAccess } = await applyFilterScope(connection, email);
+  const { hasSyncedAccess, readableTables } = await applyFilterScope(connection, email);
 
   const server = new McpServer(
     { name: "spp-data", version: "1.0.0" },
@@ -166,7 +166,7 @@ async function handleMcpRequest(event) {
       instructions: FULL_INSTRUCTIONS,
     },
   );
-  registerTools(server, connection, timings, email, hasSyncedAccess);
+  registerTools(server, connection, timings, email, hasSyncedAccess, readableTables);
 
   const transport = new LambdaTransport();
   await server.connect(transport);

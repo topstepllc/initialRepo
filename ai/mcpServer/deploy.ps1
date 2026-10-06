@@ -1,3 +1,10 @@
+# -Only limits the rollout to the named function(s) from $FunctionNames
+# below, e.g. to try a change on one customer before the rest:
+#   .\deploy.ps1 -Only sppMcpServer-rbreaux-4781
+param(
+  [string[]]$Only
+)
+
 $ErrorActionPreference = "Stop"
 
 $AccountId = "776528084998"
@@ -18,8 +25,17 @@ $FunctionNames = @(
   "sppMcpServer",
   "sppMcpServer-bgb",
   "sppMcpServer-rbreaux-2fb4",
-  "sppMcpServer-med-learning-group-llc"
+  "sppMcpServer-med-learning-group-llc",
+  "sppMcpServer-rbreaux-4781"
 )
+
+if ($Only) {
+  $unknown = $Only | Where-Object { $FunctionNames -notcontains $_ }
+  if ($unknown) {
+    throw "Unknown function name(s) for -Only: $($unknown -join ', ') -- must be one of: $($FunctionNames -join ', ')"
+  }
+  $FunctionNames = $Only
+}
 
 # Native commands (docker, aws) don't throw on failure in PowerShell --
 # they just set $LASTEXITCODE and keep going, so $ErrorActionPreference

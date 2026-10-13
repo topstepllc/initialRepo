@@ -30,7 +30,11 @@ const fs = require("fs");
 const path = require("path");
 
 const instanceName = process.env.SPP_INSTANCE_NAME || "top-step-sandbox";
-const BUCKET = "topstep-ai-offering";
+// DATA_BUCKET is set per stack (see the DataBucket template param) so a
+// second AWS account can run this against its own bucket -- S3 names are
+// global, so it can never reuse this one. Default keeps the original
+// account's stacks unchanged.
+const BUCKET = process.env.DATA_BUCKET || "topstep-ai-offering";
 const DATA_PREFIX = "spp-data";
 const basePath = `s3://${BUCKET}/${DATA_PREFIX}/${instanceName}`;
 console.log("basePath: " + basePath);
@@ -1535,6 +1539,17 @@ async function getTableSchema(connection, viewName) {
     const relKey = `${viewName}.${col.columnName}`;
     if (RELATIONSHIPS[relKey]) {
       entry.references = RELATIONSHIPS[relKey];
+    }
+
+    // Coded values (stepwise_config.json's fieldValues) go inline on the
+    // column itself -- the agent reads the schema before every query, but
+    // only calls getFieldValues when it thinks to, and confirmed it often
+    // doesn't for a column that just holds plain integers (an invoice
+    // "status" of 1-5 answered as if uncoded). Safe to cache with the rest
+    // of the schema: a stepwise_config.json reload resets cachedSchema.
+    const codedValues = FIELD_VALUES[viewName]?.[col.columnName];
+    if (codedValues) {
+      entry.values = codedValues;
     }
 
     return entry;

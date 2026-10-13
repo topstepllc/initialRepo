@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>report_config.json editor</title>
+<title>stepwise_config.json editor</title>
 <style>
   :root{
     --bg:#f4f5f3; --surface:#ffffff; --ink:#1c2420; --ink-muted:#5c6660;
@@ -109,12 +109,24 @@
   .toggle{ display:flex; gap:10px; align-items:center; font-size:12.5px; margin-bottom:8px; }
   .id-row{ display:flex; gap:8px; align-items:center; margin-bottom:4px; }
   .id-row input[type=text]{ width:70px; max-width:70px; }
+
+  /* Pages long enough to need their own scroll: the "add" controls stay
+     put as a footer instead of scrolling away with a long list. Bounded
+     to the viewport (minus main's own top/bottom padding) rather than
+     the natural document scroll the other tabs use. */
+  .fixed-page{ display:flex; flex-direction:column; height:calc(100vh - 108px); }
+  .fixed-page .panel-flex{ flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+  .fixed-page .scroll-mid{ flex:1; min-height:0; overflow-y:auto; }
+  .fixed-page .add-footer{ flex:none; border-top:1px solid var(--line); margin-top:12px; padding-top:12px; }
+
+  .role-grid th label{ display:flex; flex-direction:column; align-items:center; gap:3px; cursor:pointer; font:inherit; text-transform:inherit; letter-spacing:inherit; }
+  .role-grid th input[type=checkbox]{ width:14px; height:14px; }
 </style>
 </head>
 <body>
 
 <nav>
-  <h1>report_config.json editor</h1>
+  <h1>stepwise_config.json editor</h1>
   <button data-tab="load" class="active">Load / Export</button>
   <button data-tab="tables">Tables <span class="count" id="count-tables"></span></button>
   <button data-tab="dates">Date columns <span class="count" id="count-dates"></span></button>
@@ -124,7 +136,7 @@
   <button data-tab="rolePermissions">Role permissions <span class="count" id="count-rp"></span></button>
   <div class="spacer"></div>
   <div class="file-status" id="status-config">No config loaded</div>
-  <div class="file-status" id="status-master">No master.csv loaded</div>
+  <div class="file-status" id="status-master">No stepwise_mapping.csv loaded</div>
 </nav>
 
 <main id="main"></main>
@@ -135,6 +147,7 @@ let config = emptyConfig();
 let masterColumns = {};   // localTable -> [csvField, ...]
 let localTables = [];     // distinct localTable values from master.csv
 let activeTab = "load";
+let collapsedRoles = new Set(); // role ids currently collapsed on the Role permissions tab
 
 function emptyConfig(){
   return { reportViews:{}, dateColumns:{}, relationships:{}, fieldValues:{}, filterSets:{}, rolePermissions:{} };
@@ -151,7 +164,7 @@ function normalizeConfig(raw){
   return c;
 }
 
-// ---- CSV parsing (master.csv: company, localTable, sppType, sppField, csvField) ----
+// ---- CSV parsing (stepwise_mapping.csv: company, localTable, sppType, sppField, csvField) ----
 function parseCsv(text){
   const lines = text.split(/\r\n|\n/).filter(l => l.length);
   if (!lines.length) return [];
@@ -196,14 +209,14 @@ function businessTables(){ return Object.keys(config.reportViews).sort(); }
 
 // Columns available for a BUSINESS table name (a reportViews key), looked
 // up via the sync filename it maps to. Falls back to just ["id"] when
-// master.csv isn't loaded or the mapped filename was never synced -- that
-// one column is always real regardless (see below), so callers only need
-// a free-text fallback for anything beyond it.
+// stepwise_mapping.csv isn't loaded or the mapped filename was never synced
+// -- that one column is always real regardless (see below), so callers only
+// need a free-text fallback for anything beyond it.
 //
 // "id" is force-added to every table by sppDataSync.js's own
 // ALWAYS_INCLUDED_SPP_FIELDS, regardless of whether a row for it exists in
-// master.csv -- so it's a real column on every synced table, just one that
-// master.csv itself never has to list. Every column picker needs it
+// stepwise_mapping.csv -- so it's a real column on every synced table, just
+// one that stepwise_mapping.csv itself never has to list. Every column picker needs it
 // available (not just Relationships' target column, where it's the most
 // common case, but Date columns and Field values could legitimately
 // reference it too), so it's added once here rather than special-cased
@@ -282,20 +295,20 @@ function render(){
 function renderLoad(){
   const wrap = el("div", {});
   wrap.append(el("h2", { text: "Load an existing config, or start fresh" }));
-  wrap.append(el("p", { class:"sub", text:"master.csv is optional but strongly recommended -- every dropdown in the other tabs is populated from it, which is what keeps a table or column name from ever being typo'd by hand." }));
+  wrap.append(el("p", { class:"sub", text:"stepwise_mapping.csv is optional but strongly recommended -- every dropdown in the other tabs is populated from it, which is what keeps a table or column name from ever being typo'd by hand." }));
 
   const grid = el("div", { class:"load-grid" });
 
   const configDrop = el("div", { class: "drop" + (Object.keys(config.reportViews).length ? " ok" : "") });
   configDrop.append(el("div", {}, Object.keys(config.reportViews).length ? `Loaded (${Object.keys(config.reportViews).length} tables)` : "No config loaded yet"));
-  const configLabel = el("label", { for:"config-file" }, "Choose report_config.json");
+  const configLabel = el("label", { for:"config-file" }, "Choose stepwise_config.json");
   const configInput = el("input", { type:"file", id:"config-file", accept:".json", onchange: handleConfigFile });
   configDrop.append(configLabel, configInput);
   configDrop.append(el("div", { style:"margin-top:10px" }, el("button", { class:"btn", onclick: () => { config = emptyConfig(); render(); } }, "Start from empty instead")));
 
   const masterDrop = el("div", { class: "drop" + (localTables.length ? " ok" : "") });
-  masterDrop.append(el("div", {}, localTables.length ? `Loaded (${localTables.length} tables, ${Object.values(masterColumns).reduce((n,a)=>n+a.length,0)} columns)` : "No master.csv loaded yet"));
-  const masterLabel = el("label", { for:"master-file" }, "Choose master.csv");
+  masterDrop.append(el("div", {}, localTables.length ? `Loaded (${localTables.length} tables, ${Object.values(masterColumns).reduce((n,a)=>n+a.length,0)} columns)` : "No stepwise_mapping.csv loaded yet"));
+  const masterLabel = el("label", { for:"master-file" }, "Choose stepwise_mapping.csv");
   const masterInput = el("input", { type:"file", id:"master-file", accept:".csv", onchange: handleMasterFile });
   masterDrop.append(masterLabel, masterInput);
 
@@ -316,7 +329,7 @@ function renderLoad(){
   exportPanel.append(el("h3", { text:"Export" }));
   const jsonText = JSON.stringify(config, null, 2);
   exportPanel.append(el("div", { style:"display:flex; gap:10px; margin-bottom:14px;" },
-    el("button", { class:"btn primary", onclick: downloadConfig }, "Download report_config.json"),
+    el("button", { class:"btn primary", onclick: downloadConfig }, "Download stepwise_config.json"),
     el("span", { class:"sub", style:"margin:auto 0 auto 0;" }, `${(new Blob([jsonText]).size / 1024).toFixed(1)} KB`)
   ));
   exportPanel.append(el("pre", { class:"json-preview", text: jsonText }));
@@ -344,7 +357,7 @@ function handleMasterFile(e){
   const reader = new FileReader();
   reader.onload = () => {
     loadMasterCsv(parseCsv(reader.result));
-    document.getElementById("status-master").textContent = "master.csv: " + file.name;
+    document.getElementById("status-master").textContent = "stepwise_mapping.csv: " + file.name;
     document.getElementById("status-master").classList.add("ok");
     render();
   };
@@ -353,21 +366,22 @@ function handleMasterFile(e){
 function downloadConfig(){
   const blob = new Blob([JSON.stringify(config, null, 2)], { type:"application/json" });
   const url = URL.createObjectURL(blob);
-  const a = el("a", { href:url, download:"report_config.json" });
+  const a = el("a", { href:url, download:"stepwise_config.json" });
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
 }
 
 // ---- Tables (reportViews) ----
 function renderTables(){
-  const wrap = el("div", {});
+  const wrap = el("div", { class:"fixed-page" });
   wrap.append(el("h2", { text:"Tables" }));
   wrap.append(el("p", { class:"sub", text:"Business-friendly name the assistant uses, mapped to the actual synced filename. Required, and at least one entry must exist." }));
 
-  const panel = el("div", { class:"panel" });
+  const panel = el("div", { class:"panel panel-flex" });
+  const scrollMid = el("div", { class:"scroll-mid" });
   const rows = Object.entries(config.reportViews).sort(([a],[b]) => a.localeCompare(b));
   if (!rows.length){
-    panel.append(el("div", { class:"empty", text:"No tables yet." }));
+    scrollMid.append(el("div", { class:"empty", text:"No tables yet." }));
   } else {
     const table = el("table");
     table.append(el("tr", {}, el("th", { text:"Business name" }), el("th", { text:"Synced filename" }), el("th", {})));
@@ -378,8 +392,9 @@ function renderTables(){
         el("td", { class:"narrow" }, el("button", { class:"icon", title:"Remove", onclick: () => { delete config.reportViews[name]; render(); } }, "✕"))
       ));
     });
-    panel.append(table);
+    scrollMid.append(table);
   }
+  panel.append(scrollMid);
 
   const nameInput = el("input", { type:"text", placeholder:"businessName, e.g. projects" });
   let localSelect;
@@ -389,7 +404,8 @@ function renderTables(){
   } else {
     localSelect = el("input", { type:"text", placeholder:"synced filename, e.g. project" });
   }
-  const addRow = el("div", { class:"add-row" }, nameInput, el("span", { class:"arrow", text:"→" }), localSelect,
+  const addFooter = el("div", { class:"add-footer" });
+  addFooter.append(el("div", { class:"add-row" }, nameInput, el("span", { class:"arrow", text:"→" }), localSelect,
     el("button", { class:"btn primary", onclick: () => {
       const name = nameInput.value.trim();
       const local = localSelect.value.trim();
@@ -397,8 +413,8 @@ function renderTables(){
       config.reportViews[name] = local;
       render();
     }}, "Add table")
-  );
-  panel.append(addRow);
+  ));
+  panel.append(addFooter);
   wrap.append(panel);
   return wrap;
 }
@@ -455,14 +471,15 @@ function renderDates(){
 
 // ---- Relationships ----
 function renderRelationships(){
-  const wrap = el("div", {});
+  const wrap = el("div", { class:"fixed-page" });
   wrap.append(el("h2", { text:"Relationships" }));
   wrap.append(el("p", { class:"sub", text:"Join hints: table.column → { table, column }. The assistant writes noticeably better joins with these, and the write feature's automatic visibility checks rely on them too." }));
 
-  const panel = el("div", { class:"panel" });
+  const panel = el("div", { class:"panel panel-flex" });
+  const scrollMid = el("div", { class:"scroll-mid" });
   const entries = Object.entries(config.relationships).sort(([a],[b]) => a.localeCompare(b));
   if (!entries.length){
-    panel.append(el("div", { class:"empty", text:"No relationships yet." }));
+    scrollMid.append(el("div", { class:"empty", text:"No relationships yet." }));
   } else {
     const table = el("table");
     table.append(el("tr", {}, el("th", { text:"Source" }), el("th", {}), el("th", { text:"Target table" }), el("th", { text:"Target column" }), el("th", {})));
@@ -475,10 +492,12 @@ function renderRelationships(){
         el("td", { class:"narrow" }, el("button", { class:"icon", title:"Remove", onclick: () => { delete config.relationships[key]; render(); } }, "✕"))
       ));
     });
-    panel.append(table);
+    scrollMid.append(table);
   }
+  panel.append(scrollMid);
 
-  panel.append(el("h3", { style:"margin-top:18px", text:"Add a relationship" }));
+  const addFooter = el("div", { class:"add-footer" });
+  addFooter.append(el("h3", { style:"margin-top:0", text:"Add a relationship" }));
   const srcTableSel = el("select", {}, option("", "source table…"));
   businessTables().forEach(t => srcTableSel.appendChild(option(t)));
   const srcColWrap = el("span", {});
@@ -504,7 +523,7 @@ function renderRelationships(){
   tgtTableSel.addEventListener("change", () => { tgtCol = "id"; refreshTgtCol(); });
   refreshSrcCol(); refreshTgtCol();
 
-  const addRow = el("div", { class:"add-row" },
+  addFooter.append(el("div", { class:"add-row" },
     srcTableSel, el("span", {text:"."}), srcColWrap,
     el("span", { class:"arrow", text:"→" }),
     tgtTableSel, el("span", {text:"."}), tgtColWrap,
@@ -513,8 +532,8 @@ function renderRelationships(){
       config.relationships[`${srcTableSel.value}.${srcCol}`] = { table: tgtTableSel.value, column: tgtCol };
       render();
     }}, "Add")
-  );
-  panel.append(addRow);
+  ));
+  panel.append(addFooter);
   wrap.append(panel);
   return wrap;
 }
@@ -668,15 +687,43 @@ function renderRolePermissions(){
   ids.forEach(id => {
     const role = config.rolePermissions[id];
     if (!role.permissions) role.permissions = {};
+    const collapsed = collapsedRoles.has(id);
     const panel = el("div", { class:"panel" });
     const nameInput = el("input", { type:"text", value: role.name || "", placeholder:"role name", onchange: e => role.name = e.target.value });
+    const tableCount = Object.keys(role.permissions).length;
+    const writableCount = Object.values(role.permissions).filter(p => p.create || p.update || p.delete).length;
     panel.append(el("div", { style:"display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; gap:10px;" },
-      el("div", { style:"display:flex; gap:8px; align-items:center;" }, el("code", { text:`role ${id}` }), nameInput),
+      el("div", { style:"display:flex; gap:8px; align-items:center;" },
+        el("button", { class:"icon", title: collapsed ? "Expand" : "Collapse", style:"font-size:12px;", onclick: () => {
+          if (collapsed) collapsedRoles.delete(id); else collapsedRoles.add(id);
+          render();
+        }}, collapsed ? "▸" : "▾"),
+        el("code", { text:`role ${id}` }), nameInput,
+        collapsed ? el("span", { class:"sub", style:"margin:0;", text:`${tableCount} table${tableCount===1?"":"s"}, ${writableCount} writable` }) : null
+      ),
       el("button", { class:"icon", title:"Remove role", onclick: () => { delete config.rolePermissions[id]; render(); } }, "✕")
     ));
 
+    if (collapsed){ wrap.append(panel); return; }
+
+    // A column header's own checkbox reflects "every row currently checked
+    // for this action," and toggling it sets every row at once -- lets you
+    // flip e.g. every table's "read" on/off in one click instead of
+    // clicking down the whole column by hand.
+    function actionHeader(action, label){
+      const tables = Object.keys(role.permissions);
+      const allChecked = tables.length > 0 && tables.every(t => role.permissions[t][action]);
+      return el("th", {}, el("label", {},
+        label,
+        el("input", { type:"checkbox", checked: allChecked || null, onchange: e => {
+          tables.forEach(t => role.permissions[t][action] = e.target.checked ? 1 : 0);
+          render();
+        }})
+      ));
+    }
+
     const grid = el("table", { class:"role-grid" });
-    grid.append(el("tr", {}, el("th", { text:"Table" }), el("th", { text:"Read" }), el("th", { text:"Create" }), el("th", { text:"Update" }), el("th", { text:"Delete" }), el("th", {})));
+    grid.append(el("tr", {}, el("th", { text:"Table" }), actionHeader("read","Read"), actionHeader("create","Create"), actionHeader("update","Update"), actionHeader("delete","Delete"), el("th", {})));
     Object.keys(role.permissions).sort().forEach(table => {
       const perms = role.permissions[table];
       const row = el("tr", {}, el("td", { text:table }));
@@ -703,8 +750,15 @@ function renderRolePermissions(){
   const idInput = el("input", { type:"text", placeholder:"SPP role id, e.g. 1" });
   const nameInput = el("input", { type:"text", placeholder:"role name" });
   addPanel.append(el("div", { class:"add-row" }, idInput, nameInput, el("button", { class:"btn primary", onclick: () => {
-    if (!idInput.value.trim() || config.rolePermissions[idInput.value.trim()]) return;
-    config.rolePermissions[idInput.value.trim()] = { name: nameInput.value.trim(), permissions: {} };
+    const id = idInput.value.trim();
+    if (!id || config.rolePermissions[id]) return;
+    // Every table starts readable -- a new role is almost always "can see
+    // everything, can't change anything yet" rather than blind to tables
+    // nobody's gotten around to adding; create/update/delete still default
+    // off, same fail-closed-on-writes posture as adding one table at a time.
+    const permissions = {};
+    businessTables().forEach(t => permissions[t] = { read:1, create:0, update:0, delete:0 });
+    config.rolePermissions[id] = { name: nameInput.value.trim(), permissions };
     render();
   }}, "Add role")));
   wrap.append(addPanel);

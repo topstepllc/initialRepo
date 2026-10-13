@@ -1,0 +1,92 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  The SPP OAuth plumbing the MCP server and sppDataSync depend on, for an
+  account other than the original one (which has these as hand-made
+  tslib-* functions + the "sharedUtils" layer): tslib-getAuthorizationUrl
+  (invoked by name from ai/mcpServer/sppUserAuth.js) and
+  tslib-exchangeCodeForTokens (the redirect_uri every SPP OAuth app points
+  at -- see the CallbackUrl output). Same source files as the originals
+  (tslib/, layer/nodejs/), packaged and uploaded by
+  ai/account-setup/setup-account.ps1, which passes the S3 keys below.
+
+Parameters:
+  ArtifactBucket:
+    Type: String
+    Description: Bucket holding the zips (the account's data bucket, under _deploy/).
+  LayerKey:
+    Type: String
+  GetAuthorizationUrlKey:
+    Type: String
+  ExchangeCodeForTokensKey:
+    Type: String
+  LambdaExecutionRoleArn:
+    Type: String
+    Description: account-bootstrap.yaml's ExecutionRoleArn output.
+
+Resources:
+  SharedUtilsLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: sharedUtils
+      CompatibleRuntimes: [nodejs24.x]
+      Content:
+        S3Bucket: !Ref ArtifactBucket
+        S3Key: !Ref LayerKey
+
+  GetAuthorizationUrlFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: tslib-getAuthorizationUrl
+      Runtime: nodejs24.x
+      Handler: getAuthorizationUrl.handler
+      Timeout: 30
+      Role: !Ref LambdaExecutionRoleArn
+      Layers: [!Ref SharedUtilsLayer]
+      Code:
+        S3Bucket: !Ref ArtifactBucket
+        S3Key: !Ref GetAuthorizationUrlKey
+
+  ExchangeCodeForTokensFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: tslib-exchangeCodeForTokens
+      Runtime: nodejs24.x
+      Handler: exchangeCodeForTokens.handler
+      Timeout: 30
+      Role: !Ref LambdaExecutionRoleArn
+      Layers: [!Ref SharedUtilsLayer]
+      Code:
+        S3Bucket: !Ref ArtifactBucket
+        S3Key: !Ref ExchangeCodeForTokensKey
+
+  # Public on purpose -- it's the browser redirect target after an SPP
+  # login, so there's no caller identity to authorize. CSRF is covered by
+  # the per-row "state" check inside the handler.
+  ExchangeCodeForTokensUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !GetAtt ExchangeCodeForTokensFunction.Arn
+      AuthType: NONE
+
+  ExchangeCodeForTokensUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ExchangeCodeForTokensFunction
+      Action: lambda:InvokeFunctionUrl
+      Principal: "*"
+      FunctionUrlAuthType: NONE
+
+  # Function URLs created since late 2025 also need lambda:InvokeFunction,
+  # limited here to calls arriving through the URL.
+  ExchangeCodeForTokensInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ExchangeCodeForTokensFunction
+      Action: lambda:InvokeFunction
+      Principal: "*"
+      InvokedViaFunctionUrl: true
+
+Outputs:
+  CallbackUrl:
+    Description: Set this as the redirect URI on every SPP OAuth app this account uses.
+    Value: !GetAtt ExchangeCodeForTokensUrl.FunctionUrl

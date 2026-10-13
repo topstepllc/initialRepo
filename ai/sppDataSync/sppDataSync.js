@@ -33,7 +33,11 @@ const { SSMClient, GetParameterCommand } = require("@aws-sdk/client-ssm");
 const dynamo = new DynamoDBClient({});
 const ssm = new SSMClient({});
 
-const BUCKET = "topstep-ai-offering";
+// DATA_BUCKET is set per stack (see the DataBucket template param) so a
+// second AWS account can run this against its own bucket -- S3 names are
+// global, so it can never reuse this one. Default keeps the original
+// account's stacks unchanged.
+const BUCKET = process.env.DATA_BUCKET || "topstep-ai-offering";
 const DATA_PREFIX = "spp-data";
 const WATERMARKS_TABLE = process.env.WATERMARKS_TABLE || "sppSyncWatermarks";
 const PAGE_SIZE = 1000;

@@ -301,7 +301,11 @@ function registerTools(server, connection, timings, email, hasSyncedAccess, read
       description:
         "Returns the available SuiteProjects Pro (SPP) tables and their " +
         "exact column names/types -- column names may include spaces or " +
-        "special characters requiring double-quotes in SQL. Call this once " +
+        "special characters requiring double-quotes in SQL. A column with a " +
+        "\"values\" property stores codes, not display text: \"values\" maps " +
+        "each stored code to its meaning (e.g. {\"1\": \"Not Sent\"}) -- filter " +
+        "on the code and translate it for the user; never guess what a code " +
+        "means. Call this once " +
         "before writing any query in a conversation; you do not need to " +
         "call it again on later questions unless a query fails because it " +
         "references a table/column that doesn't exist.",

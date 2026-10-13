@@ -21,7 +21,11 @@
 // gap: an edit needs a redeploy/cold-start to take effect, acceptable for
 // phase 1 of the write feature).
 
-const BUCKET = "topstep-ai-offering";
+// DATA_BUCKET is set per stack (see the DataBucket template param) so a
+// second AWS account can run this against its own bucket -- S3 names are
+// global, so it can never reuse this one. Default keeps the original
+// account's stacks unchanged.
+const BUCKET = process.env.DATA_BUCKET || "topstep-ai-offering";
 const DATA_PREFIX = "spp-data";
 
 let cachedByLocalTable = null;

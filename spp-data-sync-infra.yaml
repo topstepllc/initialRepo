@@ -50,6 +50,14 @@ Parameters:
       deployment fails loudly instead of silently reading another
       customer's SPP credentials.
 
+  DataBucket:
+    Type: String
+    Default: topstep-ai-offering
+    Description: >
+      S3 bucket this sync writes spp-data/{SyncCompany}/... into. Must match
+      the sibling mcp-server-infra.yaml stack's DataBucket. Any account
+      other than the original one needs its own (see account-bootstrap.yaml).
+
   SyncScheduleExpression:
     Type: String
     Default: "rate(15 minutes)"
@@ -131,6 +139,7 @@ Resources:
         Variables:
           WATERMARKS_TABLE: !Ref SppSyncWatermarksTable
           SSM_PARAM_PREFIX: !Ref SSMParamPrefix
+          DATA_BUCKET: !Ref DataBucket
 
   SppDataSyncScheduleRule:
     Type: AWS::Events::Rule

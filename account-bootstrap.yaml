@@ -1,0 +1,138 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  One-time, per-AWS-account prerequisites for the SPP AI tool -- everything
+  mcp-server-infra.yaml and spp-data-sync-infra.yaml expect to already exist.
+  The original account (776528084998) grew these by hand and doesn't use
+  this stack; any additional account deploys it once, before the per-customer
+  stacks. ai/account-setup/setup-account.ps1 deploys it together with
+  dynamodb-tables.yaml (oauth_config/oauth_tokens) and oauth-lambdas.yaml.
+
+Parameters:
+  DataBucketName:
+    Type: String
+    Description: >
+      REQUIRED, globally unique. Pass the same value as DataBucket to every
+      mcp-server-infra.yaml / spp-data-sync-infra.yaml stack in this account.
+
+  ExecutionRoleName:
+    Type: String
+    Default: SppLambdaExecutionRole
+    Description: >
+      Pass this role's ARN (see Outputs) as LambdaExecutionRoleArn to every
+      per-customer stack. Each spp-mcp-server stack attaches its own
+      Cognito DCR policy to it by name.
+
+Resources:
+  # -------------------------------------------------------
+  # Data bucket: spp-data/{company}/... (synced CSVs, _config/) and
+  # static/spp-connected.html. Only static/* is public -- the one object a
+  # browser has to reach unauthenticated (the SPP-connect success page).
+  # Everything under spp-data/ is read and written only by the Lambdas'
+  # own signed requests.
+  # -------------------------------------------------------
+  DataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref DataBucketName
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: false # needed for the static/* statement below
+        RestrictPublicBuckets: false
+
+  DataBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DataBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PublicReadStaticAssets
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "${DataBucket.Arn}/static/*"
+
+  McpServerRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    Properties:
+      RepositoryName: spp-mcp-server
+
+  DataSyncRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    Properties:
+      RepositoryName: spp-data-sync
+
+  # -------------------------------------------------------
+  # Shared execution role for every sppMcpServer*/sppDataSync* Lambda in
+  # this account. Scoped to what the code actually calls (S3 data bucket,
+  # DynamoDB, SSM /spp/*, invoking sppDataSync* for post-write resyncs) --
+  # narrower than the original account's hand-made role, which also has
+  # S3/DynamoDB full access and secretsmanager:*.
+  # -------------------------------------------------------
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref ExecutionRoleName
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: spp-ai-runtime
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt DataBucket.Arn
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:AbortMultipartUpload
+                Resource: !Sub "${DataBucket.Arn}/*"
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/*"
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/spp/*"
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource:
+                  - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:sppDataSync*"
+                  # sppUserAuth.js builds per-user SPP connect links through it
+                  - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:tslib-getAuthorizationUrl"
+
+Outputs:
+  DataBucketName:
+    Value: !Ref DataBucket
+  ExecutionRoleArn:
+    Value: !GetAtt ExecutionRole.Arn
+  McpServerRepositoryUri:
+    Value: !GetAtt McpServerRepository.RepositoryUri
+  DataSyncRepositoryUri:
+    Value: !GetAtt DataSyncRepository.RepositoryUri

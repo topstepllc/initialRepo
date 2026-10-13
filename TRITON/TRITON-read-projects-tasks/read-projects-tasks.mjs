@@ -10,8 +10,10 @@
 // GET ?type=tasks&projectId=1234            -> [{ id, name, phaseId }, ...]
 //
 // Phases vs tasks: SPP splits project-task records by classification.
-// /project-tasks/ only returns Tasks (classification T); Phases (P) come
-// from /project-phases/. A task's parentId is the phase it sits directly
+// /project-tasks/ only returns Tasks (classification T), /project-milestones/
+// only returns Milestones (M), and Phases (P) come from /project-phases/.
+// Tasks and Milestones are both bookable, so "tasks" in every response below
+// is the two merged together. A task's parentId is the phase it sits directly
 // under (0 = directly on the project, no phase). Phases can nest, so a
 // phase's parentId is its parent phase (0 = top level). phaseId on tasks is
 // returned as a string, "0" for no phase.
@@ -125,12 +127,29 @@ async function getProjects(stageIds, accessToken) {
   return projects.map((p) => ({ id: String(p.id), name: p.name }));
 }
 
+// Fetches one kind of bookable record (Tasks or Milestones) for a project.
+// Both endpoints share the same filter and id/name/parentId fields.
+async function getBookableRecords(endpoint, projectId, accessToken) {
+  const filter = buildIdFilter('projectId', projectId);
+  const url = `${BASE_URL}/${endpoint}/?q=${encodeURIComponent(filter)}&fields=id,name,projectId,parentId&limit=1000&offset=0`;
+  console.log(`${endpoint} URL:`, url);
+  const records = await fetchAllPages(url, accessToken);
+  return records.map((t) => ({ id: String(t.id), name: t.name, phaseId: String(t.parentId || 0) }));
+}
+
+// Everything time can be booked to: Tasks (classification T) AND Milestones
+// (classification M). SPP serves them from separate REST endpoints, but for
+// this tool they're the same thing, so they're merged into one list (deduped
+// by id, just in case). Both are Projecttask records in the XML API, so the
+// move Lambda's target-task check accepts either.
 async function getProjectTasks(projectId, accessToken) {
-  const taskFilter = buildIdFilter('projectId', projectId);
-  const url = `${BASE_URL}/project-tasks/?q=${encodeURIComponent(taskFilter)}&fields=id,name,projectId,parentId&limit=1000&offset=0`;
-  console.log('Task URL:', url);
-  const tasks = await fetchAllPages(url, accessToken);
-  return tasks.map((t) => ({ id: String(t.id), name: t.name, phaseId: String(t.parentId || 0) }));
+  const [tasks, milestones] = await Promise.all([
+    getBookableRecords('project-tasks', projectId, accessToken),
+    getBookableRecords('project-milestones', projectId, accessToken),
+  ]);
+  const byId = new Map();
+  for (const t of [...tasks, ...milestones]) byId.set(t.id, t);
+  return [...byId.values()];
 }
 
 async function getProjectPhases(projectId, accessToken) {

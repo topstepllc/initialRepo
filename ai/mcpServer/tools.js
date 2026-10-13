@@ -270,12 +270,22 @@ function registerTools(server, connection, timings, email, hasSyncedAccess, read
       const url = await sppUserAuth.getSppConnectionUrl(email);
       return {
         connectionUrl: url,
+        // No "tell me when you're done" round trip: the model can't see the
+        // browser sign-in happen, but it doesn't need the user to announce
+        // it either -- sync_spp_access itself reports "not connected yet"
+        // if they haven't finished, so it's safe to just try it on their
+        // next message, whatever that message is.
         instructionsForAssistant:
           "Display this exact URL to the user as a clickable link now. Do " +
           "not say their account is connected -- it isn't yet. Tell them " +
-          "to open the link and sign in to SPP; only that step actually " +
-          "connects it. After they confirm they've done that, call " +
-          "sync_spp_access to pull in their access immediately.",
+          "to open the link and sign in to SPP, then simply continue with " +
+          "(or ask) their question -- do NOT ask them to tell you when " +
+          "they're done. On the user's next message, whatever it says, " +
+          "call sync_spp_access first, before anything else. If it " +
+          "succeeds, carry on with their request without commenting on the " +
+          "connection beyond a brief mention. If it reports they haven't " +
+          "connected yet, show this same link again and say the sign-in " +
+          "hasn't completed.",
       };
     }),
   );
@@ -287,9 +297,10 @@ function registerTools(server, connection, timings, email, hasSyncedAccess, read
       description:
         "Immediately refreshes the user's Projects/Users access from SPP, " +
         "rather than waiting for the periodic background refresh. Call " +
-        "this right after the user says they've connected their SPP " +
-        "account (via connect_spp_account), or if they report their " +
-        "access looks out of date.",
+        "this on the user's first message after connect_spp_account gave " +
+        "them a link -- without waiting for them to say they've signed " +
+        "in; if they haven't yet, this reports it. Also call it if they " +
+        "report their access looks out of date.",
       inputSchema: {},
     },
     wrapToolHandler(async () => doSyncSppAccess(email)),
@@ -397,8 +408,9 @@ function registerTools(server, connection, timings, email, hasSyncedAccess, read
         result.note =
           "This account's SPP connection isn't set up or hasn't synced yet " +
           "-- Projects and Users will show zero rows (by design, not a bug " +
-          "or a restrictive filter set) until connect_spp_account and " +
-          "sync_spp_access are completed. Other tables are unaffected.";
+          "or a restrictive filter set). Call sync_spp_access now; only if " +
+          "it reports they haven't connected, call connect_spp_account. " +
+          "Other tables are unaffected.";
       }
       return result;
     }),

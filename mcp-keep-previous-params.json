@@ -1,0 +1,15 @@
+[
+  { "ParameterKey": "SppInstance", "UsePreviousValue": true },
+  { "ParameterKey": "SppSyncIntegrationKey", "UsePreviousValue": true },
+  { "ParameterKey": "McpServerImageUri", "UsePreviousValue": true },
+  { "ParameterKey": "AnthropicApiKey", "UsePreviousValue": true },
+  { "ParameterKey": "TermsTableName", "UsePreviousValue": true },
+  { "ParameterKey": "ClaudeRedirectUri", "UsePreviousValue": true },
+  { "ParameterKey": "LambdaExecutionRoleArn", "UsePreviousValue": true },
+  { "ParameterKey": "SppDataSyncFunctionName", "UsePreviousValue": true },
+  { "ParameterKey": "ResourceSuffix", "UsePreviousValue": true },
+  { "ParameterKey": "SppBaseOAuthConfigKey", "UsePreviousValue": true },
+  { "ParameterKey": "SSMParamPrefix", "UsePreviousValue": true },
+  { "ParameterKey": "CognitoDomainPrefix", "UsePreviousValue": true },
+  { "ParameterKey": "SppInstanceName", "UsePreviousValue": true }
+]

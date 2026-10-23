@@ -4,6 +4,12 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      functions:
+        description: 'Comma-separated folders (e.g. ai/aiQueryReports,ai/otherFn) or "all"'
+        required: true
+        default: 'all'
 
 jobs:
   detect-changes:
@@ -17,16 +23,39 @@ jobs:
 
       - name: Detect changed functions
         id: changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_FUNCTIONS: ${{ inputs.functions }}
         run: |
-          CHANGED=$(git diff --name-only HEAD~1 HEAD \
-            | grep -E '^[^.][^/]+/[^/]+/' \
-            | awk -F'/' '{print $1"/"$2}' \
-            | sort -u \
-            | grep -v '^\.github' \
-            | grep -v '^shared' \
-            | grep -v '^node_modules' \
-            | grep -v '^layer' \
-            | jq -R -s -c 'split("\n")[:-1]')
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ "$INPUT_FUNCTIONS" = "all" ]; then
+              CHANGED=$(find . -mindepth 2 -maxdepth 2 -type d -not -path './.*' \
+                | sed 's|^\./||' \
+                | grep -v '^shared' \
+                | grep -v '^node_modules' \
+                | grep -v '^layer' \
+                | grep -v '/node_modules$' \
+                | sort -u \
+                | jq -R -s -c 'split("\n")[:-1]')
+            else
+              CHANGED=$(echo "$INPUT_FUNCTIONS" \
+                | tr ',' '\n' \
+                | sed 's/^ *//;s/ *$//' \
+                | grep -v '^$' \
+                | jq -R -s -c 'split("\n")[:-1]')
+            fi
+          else
+            CHANGED=$(git diff --name-only HEAD~1 HEAD \
+              | grep -E '^[^.][^/]+/[^/]+/' \
+              | awk -F'/' '{print $1"/"$2}' \
+              | sort -u \
+              | grep -v '^\.github' \
+              | grep -v '^shared' \
+              | grep -v '^node_modules' \
+              | grep -v '^layer' \
+              | jq -R -s -c 'split("\n")[:-1]')
+          fi
+          echo "Functions to deploy: $CHANGED"
           echo "functions=$CHANGED" >> $GITHUB_OUTPUT
 
   deploy:
@@ -34,6 +63,7 @@ jobs:
     runs-on: ubuntu-latest
     if: needs.detect-changes.outputs.functions != '[]'
     strategy:
+      fail-fast: false
       matrix:
         function: ${{ fromJson(needs.detect-changes.outputs.functions) }}
     steps:
@@ -49,9 +79,23 @@ jobs:
       - name: Deploy ${{ matrix.function }}
         run: |
           FUNCTION_NAME=$(basename ${{ matrix.function }})
+
+          # Skip image-based functions (deployed via deploy.ps1 / ECR)
+          PKG=$(aws lambda get-function-configuration \
+                  --function-name "$FUNCTION_NAME" \
+                  --query PackageType --output text 2>/dev/null || echo "NotFound")
+          if [ "$PKG" = "Image" ]; then
+            echo "Skipping $FUNCTION_NAME: image-based function, deployed outside Actions"
+            exit 0
+          fi
+          if [ "$PKG" = "NotFound" ]; then
+            echo "Skipping $FUNCTION_NAME: no Lambda function by that name"
+            exit 0
+          fi
+
           cd ${{ matrix.function }}
-          zip -r ../../function.zip .
+          zip -r ../../function.zip . -x "*.zip" "*.bak" "*.ps1" "Dockerfile" "buildspec.yml"
           aws lambda update-function-code \
-            --function-name $FUNCTION_NAME \
+            --function-name "$FUNCTION_NAME" \
             --zip-file fileb://../../function.zip
           rm ../../function.zip

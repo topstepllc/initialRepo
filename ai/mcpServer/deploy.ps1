@@ -1,10 +1,23 @@
-$ErrorActionPreference = "Stop"
+# Builds the spp-mcp-server image once and deploys it to every enabled
+# account in ai/deploy-targets.ps1.
+#   -Only   limits the rollout to the named function(s), e.g. to try a
+#           change on one customer before the rest:
+#             .\deploy.ps1 -Only sppMcpServer-rbreaux-4781
+#   -Target limits it to the named account(s) (also how to reach one whose
+#           Enabled is still $false):
+#             .\deploy.ps1 -Target second
+#   -PushOnly builds and pushes without updating any function.
+param(
+  [string[]]$Only,
+  [string[]]$Target,
+  [switch]$PushOnly
+)
 
-$AccountId = "776528084998"
-$Region = "us-east-2"
+$ErrorActionPreference = "Stop"
+. "$PSScriptRoot\..\deploy-targets.ps1"
+
 $RepoName = "spp-mcp-server"
-$FunctionName = "sppMcpServer"
-$ImageUri = "$AccountId.dkr.ecr.$Region.amazonaws.com/$RepoName`:latest"
+$env:AWS_PAGER = ""
 
 # Build context is the REPO ROOT, not this folder -- the Dockerfile reaches
 # into ai/aiQueryReports (DuckDB tool logic) and layer/nodejs (SPP OAuth
@@ -14,18 +27,9 @@ try {
   Write-Host "Building image..." -ForegroundColor Cyan
   docker buildx build --platform linux/amd64 --provenance=false --output=type=docker `
     -f ai/mcpServer/Dockerfile -t $RepoName .
+  Assert-Success "docker build"
 } finally {
   Pop-Location
 }
 
-Write-Host "Tagging image..." -ForegroundColor Cyan
-docker tag "$RepoName`:latest" $ImageUri
-
-Write-Host "Pushing to ECR..." -ForegroundColor Cyan
-docker push $ImageUri
-
-Write-Host "Updating Lambda function..." -ForegroundColor Cyan
-$env:AWS_PAGER = ""
-aws lambda update-function-code --function-name $FunctionName --image-uri $ImageUri --region $Region --query "LastUpdateStatus" --output text
-
-Write-Host "Done." -ForegroundColor Green
+Publish-ImageToTargets -RepoName $RepoName -Target $Target -Only $Only -PushOnly:$PushOnly

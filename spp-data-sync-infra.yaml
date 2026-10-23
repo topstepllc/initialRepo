@@ -2,7 +2,7 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   Infrastructure for sppDataSync (ai/sppDataSync/) -- replaces Celigo for
   populating the SPP data CSVs in S3. Runs on an EventBridge schedule
-  against the whole master.csv (see SyncScheduleExpression below), and can
+  against the whole stepwise_mapping.csv (see SyncScheduleExpression below), and can
   still be invoked manually/per-table too -- see the Lambda's own comments
   for the sync design.
 
@@ -50,12 +50,20 @@ Parameters:
       deployment fails loudly instead of silently reading another
       customer's SPP credentials.
 
+  DataBucket:
+    Type: String
+    Default: topstep-ai-offering
+    Description: >
+      S3 bucket this sync writes spp-data/{SyncCompany}/... into. Must match
+      the sibling mcp-server-infra.yaml stack's DataBucket. Any account
+      other than the original one needs its own (see account-bootstrap.yaml).
+
   SyncScheduleExpression:
     Type: String
     Default: "rate(15 minutes)"
     Description: >
       EventBridge schedule expression for an automatic all-tables sync
-      (runs the whole master.csv, same as a manual invoke with no "table"
+      (runs the whole stepwise_mapping.csv, same as a manual invoke with no "table"
       in the payload). Set to "" (empty) to disable scheduling entirely --
       no EventBridge rule gets created, manual/per-table invokes still
       work as always. SyncIntegrationKey, SyncInstance, and SyncCompany
@@ -131,6 +139,7 @@ Resources:
         Variables:
           WATERMARKS_TABLE: !Ref SppSyncWatermarksTable
           SSM_PARAM_PREFIX: !Ref SSMParamPrefix
+          DATA_BUCKET: !Ref DataBucket
 
   SppDataSyncScheduleRule:
     Type: AWS::Events::Rule

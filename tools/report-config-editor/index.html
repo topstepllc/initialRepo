@@ -1,0 +1,776 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>stepwise_config.json editor</title>
+<style>
+  :root{
+    --bg:#f4f5f3; --surface:#ffffff; --ink:#1c2420; --ink-muted:#5c6660;
+    --line:#d7ddd9; --accent:#2f6b54; --accent-soft:#e3f0ea;
+    --warn:#a65d1e; --warn-soft:#fbead9; --danger:#a13b3b; --danger-soft:#f6e1e0;
+    --mono:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;}
+  body{
+    display:flex; background:var(--bg); color:var(--ink);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  }
+
+  /* ---- sidebar ---- */
+  nav{
+    width:220px; flex:none; background:var(--surface); border-right:1px solid var(--line);
+    padding:18px 0; display:flex; flex-direction:column; height:100vh; position:sticky; top:0;
+  }
+  nav h1{ font-size:14px; font-weight:700; margin:0 18px 16px; }
+  nav button{
+    display:block; width:100%; text-align:left; background:none; border:none;
+    padding:10px 18px; font:inherit; color:var(--ink-muted); cursor:pointer; border-left:3px solid transparent;
+  }
+  nav button:hover{ background:var(--accent-soft); color:var(--ink); }
+  nav button.active{ color:var(--accent); border-left-color:var(--accent); font-weight:600; background:var(--accent-soft); }
+  nav .count{ font-family:var(--mono); font-size:11px; color:var(--ink-muted); float:right; }
+  nav .spacer{ flex:1; }
+  nav .file-status{ padding:10px 18px; font-size:11.5px; color:var(--ink-muted); border-top:1px solid var(--line); }
+  nav .file-status strong{ color:var(--ink); }
+  nav .file-status.ok{ color:var(--accent); }
+  nav .file-status.ok strong{ color:var(--accent); }
+
+  /* ---- main ---- */
+  main{ flex:1; padding:28px 36px 80px; max-width:980px; }
+  h2{ font-size:19px; margin:0 0 4px; }
+  .sub{ color:var(--ink-muted); font-size:13px; margin:0 0 20px; max-width:70ch; }
+
+  .panel{ background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:18px 20px; margin-bottom:18px; }
+  .panel h3{ font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-muted); margin:0 0 12px; }
+
+  table{ width:100%; border-collapse:collapse; font-size:13px; }
+  th,td{ text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:middle; }
+  th{ font-size:11px; text-transform:uppercase; letter-spacing:.03em; color:var(--ink-muted); }
+  td.narrow{ width:1%; white-space:nowrap; }
+  code{ font-family:var(--mono); background:var(--accent-soft); color:var(--accent); padding:1px 5px; border-radius:4px; font-size:12.5px; }
+
+  input[type=text],input[type=number],select{
+    font:inherit; padding:5px 8px; border:1px solid var(--line); border-radius:5px;
+    background:var(--surface); color:var(--ink); min-width:0;
+  }
+  select{ max-width:220px; }
+  input[type=text]{ max-width:220px; }
+
+  button.btn{
+    font:inherit; font-weight:600; padding:6px 12px; border-radius:6px; border:1px solid var(--line);
+    background:var(--surface); color:var(--ink); cursor:pointer;
+  }
+  button.btn:hover{ border-color:var(--accent); color:var(--accent); }
+  button.btn.primary{ background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.btn.primary:hover{ opacity:.9; color:#fff; }
+  button.icon{
+    font:inherit; border:none; background:none; color:var(--ink-muted); cursor:pointer; font-size:15px; line-height:1; padding:4px 6px;
+  }
+  button.icon:hover{ color:var(--danger); }
+
+  .chip{
+    display:inline-flex; align-items:center; gap:6px; background:var(--accent-soft); color:var(--accent);
+    border-radius:20px; padding:3px 6px 3px 12px; font-size:12.5px; font-family:var(--mono); margin:3px 6px 3px 0;
+  }
+  .chip button{ border:none; background:none; color:var(--accent); cursor:pointer; font-size:14px; line-height:1; padding:2px; }
+
+  .add-row{ display:flex; gap:8px; align-items:center; margin-top:12px; flex-wrap:wrap; }
+  .add-row .arrow{ color:var(--ink-muted); }
+
+  .empty{ color:var(--ink-muted); font-style:italic; padding:10px 0; }
+
+  .warnings{ background:var(--warn-soft); border:1px solid #e3c08f; color:var(--warn); border-radius:8px; padding:12px 16px; margin-bottom:18px; font-size:13px; }
+  .warnings strong{ display:block; margin-bottom:6px; }
+  .warnings ul{ margin:0; padding-left:18px; }
+
+  .load-grid{ display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width:760px){ .load-grid{ grid-template-columns:1fr; } }
+  .drop{
+    border:1.5px dashed var(--line); border-radius:8px; padding:20px; text-align:center; color:var(--ink-muted); font-size:13px;
+  }
+  .drop.ok{ border-color:var(--accent); background:var(--accent-soft); color:var(--accent); }
+  .drop input{ display:none; }
+  .drop label{ cursor:pointer; color:var(--accent); font-weight:600; }
+
+  pre.json-preview{
+    background:#1c2420; color:#dfe8e3; padding:16px; border-radius:8px; overflow:auto; max-height:70vh;
+    font-family:var(--mono); font-size:12px; line-height:1.5;
+  }
+
+  .role-grid{ width:100%; border-collapse:collapse; font-size:12.5px; }
+  .role-grid th,.role-grid td{ padding:5px 7px; border-bottom:1px solid var(--line); text-align:center; }
+  .role-grid td:first-child,.role-grid th:first-child{ text-align:left; font-family:var(--mono); }
+  .role-grid input[type=checkbox]{ width:15px; height:15px; }
+
+  .fs-table{ border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:10px; }
+  .fs-table-head{ display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+  .fs-table-head code{ font-size:13px; }
+  .toggle{ display:flex; gap:10px; align-items:center; font-size:12.5px; margin-bottom:8px; }
+  .id-row{ display:flex; gap:8px; align-items:center; margin-bottom:4px; }
+  .id-row input[type=text]{ width:70px; max-width:70px; }
+
+  /* Pages long enough to need their own scroll: the "add" controls stay
+     put as a footer instead of scrolling away with a long list. Bounded
+     to the viewport (minus main's own top/bottom padding) rather than
+     the natural document scroll the other tabs use. */
+  .fixed-page{ display:flex; flex-direction:column; height:calc(100vh - 108px); }
+  .fixed-page .panel-flex{ flex:1; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+  .fixed-page .scroll-mid{ flex:1; min-height:0; overflow-y:auto; }
+  .fixed-page .add-footer{ flex:none; border-top:1px solid var(--line); margin-top:12px; padding-top:12px; }
+
+  .role-grid th label{ display:flex; flex-direction:column; align-items:center; gap:3px; cursor:pointer; font:inherit; text-transform:inherit; letter-spacing:inherit; }
+  .role-grid th input[type=checkbox]{ width:14px; height:14px; }
+</style>
+</head>
+<body>
+
+<nav>
+  <h1>stepwise_config.json editor</h1>
+  <button data-tab="load" class="active">Load / Export</button>
+  <button data-tab="tables">Tables <span class="count" id="count-tables"></span></button>
+  <button data-tab="dates">Date columns <span class="count" id="count-dates"></span></button>
+  <button data-tab="relationships">Relationships <span class="count" id="count-rel"></span></button>
+  <button data-tab="fieldValues">Field values <span class="count" id="count-fv"></span></button>
+  <button data-tab="filterSets">Filter sets <span class="count" id="count-fs"></span></button>
+  <button data-tab="rolePermissions">Role permissions <span class="count" id="count-rp"></span></button>
+  <div class="spacer"></div>
+  <div class="file-status" id="status-config">No config loaded</div>
+  <div class="file-status" id="status-master">No stepwise_mapping.csv loaded</div>
+</nav>
+
+<main id="main"></main>
+
+<script>
+// ---- state -------------------------------------------------------------
+let config = emptyConfig();
+let masterColumns = {};   // localTable -> [csvField, ...]
+let localTables = [];     // distinct localTable values from master.csv
+let activeTab = "load";
+let collapsedRoles = new Set(); // role ids currently collapsed on the Role permissions tab
+
+function emptyConfig(){
+  return { reportViews:{}, dateColumns:{}, relationships:{}, fieldValues:{}, filterSets:{}, rolePermissions:{} };
+}
+
+// Fills in any of the six top-level sections a loaded file is missing,
+// rather than letting later code branch on "does this key exist" --
+// every section is optional in a real report_config.json (see the
+// onboarding playbook), but easiest to treat as "present but empty" once
+// loaded here.
+function normalizeConfig(raw){
+  const c = emptyConfig();
+  for (const key of Object.keys(c)) if (raw && typeof raw[key] === "object" && raw[key]) c[key] = raw[key];
+  return c;
+}
+
+// ---- CSV parsing (stepwise_mapping.csv: company, localTable, sppType, sppField, csvField) ----
+function parseCsv(text){
+  const lines = text.split(/\r\n|\n/).filter(l => l.length);
+  if (!lines.length) return [];
+  const headers = splitCsvLine(lines[0]);
+  return lines.slice(1).map(line => {
+    const cells = splitCsvLine(line);
+    const row = {};
+    headers.forEach((h, i) => row[h] = cells[i] ?? "");
+    return row;
+  });
+}
+function splitCsvLine(line){
+  const out = []; let cur = ""; let inQuotes = false;
+  for (let i = 0; i < line.length; i++){
+    const ch = line[i];
+    if (inQuotes){
+      if (ch === '"' && line[i+1] === '"'){ cur += '"'; i++; }
+      else if (ch === '"'){ inQuotes = false; }
+      else cur += ch;
+    } else {
+      if (ch === '"') inQuotes = true;
+      else if (ch === ','){ out.push(cur); cur = ""; }
+      else cur += ch;
+    }
+  }
+  out.push(cur);
+  return out;
+}
+
+function loadMasterCsv(rows){
+  masterColumns = {};
+  for (const row of rows){
+    if (!row.localTable) continue;
+    if (!masterColumns[row.localTable]) masterColumns[row.localTable] = new Set();
+    masterColumns[row.localTable].add(row.csvField || row.sppField);
+  }
+  for (const k of Object.keys(masterColumns)) masterColumns[k] = [...masterColumns[k]].sort();
+  localTables = Object.keys(masterColumns).sort();
+}
+
+function businessTables(){ return Object.keys(config.reportViews).sort(); }
+
+// Columns available for a BUSINESS table name (a reportViews key), looked
+// up via the sync filename it maps to. Falls back to just ["id"] when
+// stepwise_mapping.csv isn't loaded or the mapped filename was never synced
+// -- that one column is always real regardless (see below), so callers only
+// need a free-text fallback for anything beyond it.
+//
+// "id" is force-added to every table by sppDataSync.js's own
+// ALWAYS_INCLUDED_SPP_FIELDS, regardless of whether a row for it exists in
+// stepwise_mapping.csv -- so it's a real column on every synced table, just
+// one that stepwise_mapping.csv itself never has to list. Every column picker needs it
+// available (not just Relationships' target column, where it's the most
+// common case, but Date columns and Field values could legitimately
+// reference it too), so it's added once here rather than special-cased
+// per tab.
+function columnsFor(businessName){
+  const local = config.reportViews[businessName];
+  const cols = (local && masterColumns[local]) ? masterColumns[local] : [];
+  return cols.includes("id") ? cols : ["id", ...cols];
+}
+
+// ---- validation ----------------------------------------------------------
+function validate(){
+  const warnings = [];
+  const known = new Set(businessTables());
+  const missing = (label, table) => { if (!known.has(table)) warnings.push(`${label} references "${table}", which is not in Tables (reportViews).`); };
+
+  for (const t of Object.keys(config.dateColumns)) missing("Date columns", t);
+  for (const [key, rel] of Object.entries(config.relationships)){
+    const [srcTable] = key.split(".");
+    missing(`Relationship "${key}"`, srcTable);
+    if (rel && rel.table) missing(`Relationship "${key}" target`, rel.table);
+  }
+  for (const t of Object.keys(config.fieldValues)) missing("Field values", t);
+  for (const fs of Object.values(config.filterSets)){
+    for (const t of Object.keys(fs.permittedValues || {})) missing("A filter set", t);
+  }
+  for (const role of Object.values(config.rolePermissions)){
+    for (const t of Object.keys(role.permissions || {})) missing(`Role "${role.name || "?"}"`, t);
+  }
+
+  if (!Object.keys(config.reportViews).length) warnings.push("reportViews is empty -- the Lambda refuses to start without at least one entry.");
+  return warnings;
+}
+
+// ---- rendering -------------------------------------------------------------
+function el(tag, attrs, ...children){
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})){
+    if (k === "text") node.textContent = v;
+    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+    else if (v !== false && v !== null && v !== undefined) node.setAttribute(k, v);
+  }
+  for (const child of children.flat()) if (child) node.appendChild(typeof child === "string" ? document.createTextNode(child) : child);
+  return node;
+}
+function option(value, label){ const o = document.createElement("option"); o.value = value; o.textContent = label ?? value; return o; }
+
+function tableOrTextInput(businessName, currentValue, onChange){
+  const cols = columnsFor(businessName);
+  if (cols.length){
+    const sel = el("select", { onchange: e => onChange(e.target.value) }, option("", "choose a column…"));
+    cols.forEach(c => sel.appendChild(option(c)));
+    if (currentValue) sel.value = currentValue;
+    return sel;
+  }
+  const input = el("input", { type:"text", placeholder:"column name", value: currentValue || "", onchange: e => onChange(e.target.value) });
+  return input;
+}
+
+function render(){
+  document.querySelectorAll("nav button[data-tab]").forEach(b => b.classList.toggle("active", b.dataset.tab === activeTab));
+  document.getElementById("count-tables").textContent = Object.keys(config.reportViews).length || "";
+  document.getElementById("count-dates").textContent = Object.values(config.dateColumns).reduce((n,a) => n + (a?.length||0), 0) || "";
+  document.getElementById("count-rel").textContent = Object.keys(config.relationships).length || "";
+  document.getElementById("count-fv").textContent = Object.keys(config.fieldValues).length || "";
+  document.getElementById("count-fs").textContent = Object.keys(config.filterSets).length || "";
+  document.getElementById("count-rp").textContent = Object.keys(config.rolePermissions).length || "";
+
+  const main = document.getElementById("main");
+  main.innerHTML = "";
+  const renderers = { load: renderLoad, tables: renderTables, dates: renderDates, relationships: renderRelationships, fieldValues: renderFieldValues, filterSets: renderFilterSets, rolePermissions: renderRolePermissions };
+  main.appendChild(renderers[activeTab]());
+}
+
+// ---- Load / Export tab ----
+function renderLoad(){
+  const wrap = el("div", {});
+  wrap.append(el("h2", { text: "Load an existing config, or start fresh" }));
+  wrap.append(el("p", { class:"sub", text:"stepwise_mapping.csv is optional but strongly recommended -- every dropdown in the other tabs is populated from it, which is what keeps a table or column name from ever being typo'd by hand." }));
+
+  const grid = el("div", { class:"load-grid" });
+
+  const configDrop = el("div", { class: "drop" + (Object.keys(config.reportViews).length ? " ok" : "") });
+  configDrop.append(el("div", {}, Object.keys(config.reportViews).length ? `Loaded (${Object.keys(config.reportViews).length} tables)` : "No config loaded yet"));
+  const configLabel = el("label", { for:"config-file" }, "Choose stepwise_config.json");
+  const configInput = el("input", { type:"file", id:"config-file", accept:".json", onchange: handleConfigFile });
+  configDrop.append(configLabel, configInput);
+  configDrop.append(el("div", { style:"margin-top:10px" }, el("button", { class:"btn", onclick: () => { config = emptyConfig(); render(); } }, "Start from empty instead")));
+
+  const masterDrop = el("div", { class: "drop" + (localTables.length ? " ok" : "") });
+  masterDrop.append(el("div", {}, localTables.length ? `Loaded (${localTables.length} tables, ${Object.values(masterColumns).reduce((n,a)=>n+a.length,0)} columns)` : "No stepwise_mapping.csv loaded yet"));
+  const masterLabel = el("label", { for:"master-file" }, "Choose stepwise_mapping.csv");
+  const masterInput = el("input", { type:"file", id:"master-file", accept:".csv", onchange: handleMasterFile });
+  masterDrop.append(masterLabel, masterInput);
+
+  grid.append(configDrop, masterDrop);
+  wrap.append(grid);
+
+  const warnings = validate();
+  if (warnings.length){
+    const box = el("div", { class:"warnings" });
+    box.append(el("strong", { text:`${warnings.length} thing${warnings.length===1?"":"s"} worth checking` }));
+    const ul = el("ul");
+    warnings.forEach(w => ul.append(el("li", { text:w })));
+    box.append(ul);
+    wrap.append(box);
+  }
+
+  const exportPanel = el("div", { class:"panel" });
+  exportPanel.append(el("h3", { text:"Export" }));
+  const jsonText = JSON.stringify(config, null, 2);
+  exportPanel.append(el("div", { style:"display:flex; gap:10px; margin-bottom:14px;" },
+    el("button", { class:"btn primary", onclick: downloadConfig }, "Download stepwise_config.json"),
+    el("span", { class:"sub", style:"margin:auto 0 auto 0;" }, `${(new Blob([jsonText]).size / 1024).toFixed(1)} KB`)
+  ));
+  exportPanel.append(el("pre", { class:"json-preview", text: jsonText }));
+  wrap.append(exportPanel);
+
+  return wrap;
+}
+
+function handleConfigFile(e){
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try { config = normalizeConfig(JSON.parse(reader.result)); }
+    catch (err) { alert("Could not parse that file as JSON: " + err.message); return; }
+    document.getElementById("status-config").textContent = "Config: " + file.name;
+    document.getElementById("status-config").classList.add("ok");
+    render();
+  };
+  reader.readAsText(file);
+}
+function handleMasterFile(e){
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    loadMasterCsv(parseCsv(reader.result));
+    document.getElementById("status-master").textContent = "stepwise_mapping.csv: " + file.name;
+    document.getElementById("status-master").classList.add("ok");
+    render();
+  };
+  reader.readAsText(file);
+}
+function downloadConfig(){
+  const blob = new Blob([JSON.stringify(config, null, 2)], { type:"application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = el("a", { href:url, download:"stepwise_config.json" });
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// ---- Tables (reportViews) ----
+function renderTables(){
+  const wrap = el("div", { class:"fixed-page" });
+  wrap.append(el("h2", { text:"Tables" }));
+  wrap.append(el("p", { class:"sub", text:"Business-friendly name the assistant uses, mapped to the actual synced filename. Required, and at least one entry must exist." }));
+
+  const panel = el("div", { class:"panel panel-flex" });
+  const scrollMid = el("div", { class:"scroll-mid" });
+  const rows = Object.entries(config.reportViews).sort(([a],[b]) => a.localeCompare(b));
+  if (!rows.length){
+    scrollMid.append(el("div", { class:"empty", text:"No tables yet." }));
+  } else {
+    const table = el("table");
+    table.append(el("tr", {}, el("th", { text:"Business name" }), el("th", { text:"Synced filename" }), el("th", {})));
+    rows.forEach(([name, local]) => {
+      table.append(el("tr", {},
+        el("td", {}, el("code", { text:name })),
+        el("td", {}, el("code", { text:local })),
+        el("td", { class:"narrow" }, el("button", { class:"icon", title:"Remove", onclick: () => { delete config.reportViews[name]; render(); } }, "✕"))
+      ));
+    });
+    scrollMid.append(table);
+  }
+  panel.append(scrollMid);
+
+  const nameInput = el("input", { type:"text", placeholder:"businessName, e.g. projects" });
+  let localSelect;
+  if (localTables.length){
+    localSelect = el("select", {}, option("", "synced filename…"));
+    localTables.forEach(t => localSelect.appendChild(option(t)));
+  } else {
+    localSelect = el("input", { type:"text", placeholder:"synced filename, e.g. project" });
+  }
+  const addFooter = el("div", { class:"add-footer" });
+  addFooter.append(el("div", { class:"add-row" }, nameInput, el("span", { class:"arrow", text:"→" }), localSelect,
+    el("button", { class:"btn primary", onclick: () => {
+      const name = nameInput.value.trim();
+      const local = localSelect.value.trim();
+      if (!name || !local) return;
+      config.reportViews[name] = local;
+      render();
+    }}, "Add table")
+  ));
+  panel.append(addFooter);
+  wrap.append(panel);
+  return wrap;
+}
+
+// ---- Date columns ----
+function renderDates(){
+  const wrap = el("div", {});
+  wrap.append(el("h2", { text:"Date columns" }));
+  wrap.append(el("p", { class:"sub", text:"Every date/timestamp column, per table -- this is what lets the assistant reason about \"this month\" or \"last quarter\" instead of treating a date as plain text." }));
+
+  if (!businessTables().length){
+    wrap.append(el("div", { class:"panel" }, el("div", { class:"empty", text:"Add tables first, on the Tables tab." })));
+    return wrap;
+  }
+
+  businessTables().forEach(name => {
+    const panel = el("div", { class:"panel" });
+    panel.append(el("h3", { text:name }));
+    const chips = el("div", {});
+    const current = config.dateColumns[name] || [];
+    current.forEach((col, i) => {
+      chips.append(el("span", { class:"chip" }, col,
+        el("button", { onclick: () => { current.splice(i,1); render(); } }, "✕")
+      ));
+    });
+    if (!current.length) chips.append(el("span", { class:"empty", text:"no date columns configured" }));
+    panel.append(chips);
+
+    const cols = columnsFor(name).filter(c => !current.includes(c));
+    const row = el("div", { class:"add-row" });
+    if (cols.length){
+      const sel = el("select", {}, option("", "add column…"));
+      cols.forEach(c => sel.appendChild(option(c)));
+      row.append(sel, el("button", { class:"btn", onclick: () => {
+        if (!sel.value) return;
+        if (!config.dateColumns[name]) config.dateColumns[name] = [];
+        config.dateColumns[name].push(sel.value);
+        render();
+      }}, "Add"));
+    } else {
+      const input = el("input", { type:"text", placeholder:"column name" });
+      row.append(input, el("button", { class:"btn", onclick: () => {
+        if (!input.value.trim()) return;
+        if (!config.dateColumns[name]) config.dateColumns[name] = [];
+        config.dateColumns[name].push(input.value.trim());
+        render();
+      }}, "Add"));
+    }
+    panel.append(row);
+    wrap.append(panel);
+  });
+  return wrap;
+}
+
+// ---- Relationships ----
+function renderRelationships(){
+  const wrap = el("div", { class:"fixed-page" });
+  wrap.append(el("h2", { text:"Relationships" }));
+  wrap.append(el("p", { class:"sub", text:"Join hints: table.column → { table, column }. The assistant writes noticeably better joins with these, and the write feature's automatic visibility checks rely on them too." }));
+
+  const panel = el("div", { class:"panel panel-flex" });
+  const scrollMid = el("div", { class:"scroll-mid" });
+  const entries = Object.entries(config.relationships).sort(([a],[b]) => a.localeCompare(b));
+  if (!entries.length){
+    scrollMid.append(el("div", { class:"empty", text:"No relationships yet." }));
+  } else {
+    const table = el("table");
+    table.append(el("tr", {}, el("th", { text:"Source" }), el("th", {}), el("th", { text:"Target table" }), el("th", { text:"Target column" }), el("th", {})));
+    entries.forEach(([key, rel]) => {
+      table.append(el("tr", {},
+        el("td", {}, el("code", { text:key })),
+        el("td", { text:"→" }),
+        el("td", {}, el("code", { text: rel.table })),
+        el("td", {}, el("code", { text: rel.column })),
+        el("td", { class:"narrow" }, el("button", { class:"icon", title:"Remove", onclick: () => { delete config.relationships[key]; render(); } }, "✕"))
+      ));
+    });
+    scrollMid.append(table);
+  }
+  panel.append(scrollMid);
+
+  const addFooter = el("div", { class:"add-footer" });
+  addFooter.append(el("h3", { style:"margin-top:0", text:"Add a relationship" }));
+  const srcTableSel = el("select", {}, option("", "source table…"));
+  businessTables().forEach(t => srcTableSel.appendChild(option(t)));
+  const srcColWrap = el("span", {});
+  const tgtTableSel = el("select", {}, option("", "target table…"));
+  businessTables().forEach(t => tgtTableSel.appendChild(option(t)));
+  const tgtColWrap = el("span", {});
+
+  let srcCol = "", tgtCol = "id";
+  function refreshSrcCol(){
+    srcColWrap.innerHTML = "";
+    if (!srcTableSel.value){ srcColWrap.append(el("input", { type:"text", placeholder:"source column", disabled:"true" })); return; }
+    srcColWrap.append(tableOrTextInput(srcTableSel.value, srcCol, v => srcCol = v));
+  }
+  function refreshTgtCol(){
+    tgtColWrap.innerHTML = "";
+    if (!tgtTableSel.value){ tgtColWrap.append(el("input", { type:"text", placeholder:"target column", value:"id" })); return; }
+    tgtColWrap.append(tableOrTextInput(tgtTableSel.value, tgtCol || "id", v => tgtCol = v));
+  }
+  // Reset the picked column whenever the table changes -- otherwise a
+  // stale column from the PREVIOUS table (not a valid option in the new
+  // one, so the dropdown LOOKS blank) would still be the value "Add" uses.
+  srcTableSel.addEventListener("change", () => { srcCol = ""; refreshSrcCol(); });
+  tgtTableSel.addEventListener("change", () => { tgtCol = "id"; refreshTgtCol(); });
+  refreshSrcCol(); refreshTgtCol();
+
+  addFooter.append(el("div", { class:"add-row" },
+    srcTableSel, el("span", {text:"."}), srcColWrap,
+    el("span", { class:"arrow", text:"→" }),
+    tgtTableSel, el("span", {text:"."}), tgtColWrap,
+    el("button", { class:"btn primary", onclick: () => {
+      if (!srcTableSel.value || !srcCol || !tgtTableSel.value || !tgtCol) { alert("Fill in source table/column and target table/column first."); return; }
+      config.relationships[`${srcTableSel.value}.${srcCol}`] = { table: tgtTableSel.value, column: tgtCol };
+      render();
+    }}, "Add")
+  ));
+  panel.append(addFooter);
+  wrap.append(panel);
+  return wrap;
+}
+
+// ---- Field values ----
+function renderFieldValues(){
+  const wrap = el("div", {});
+  wrap.append(el("h2", { text:"Field values" }));
+  wrap.append(el("p", { class:"sub", text:"Coded value translations, e.g. a charge type of \"T\" meaning \"T&M\". Grouped by table, then column." }));
+
+  const tables = Object.keys(config.fieldValues).sort();
+  if (!tables.length){
+    wrap.append(el("div", { class:"panel" }, el("div", { class:"empty", text:"No field value mappings yet." })));
+  }
+  tables.forEach(table => {
+    const panel = el("div", { class:"panel" });
+    panel.append(el("h3", { text:table }));
+    const columns = config.fieldValues[table];
+    Object.keys(columns).forEach(col => {
+      const colBox = el("div", { style:"margin-bottom:14px; padding-bottom:12px; border-bottom:1px solid var(--line);" });
+      colBox.append(el("div", { style:"display:flex; justify-content:space-between; align-items:center;" },
+        el("code", { text: col }),
+        el("button", { class:"icon", title:"Remove column", onclick: () => { delete columns[col]; render(); } }, "✕")
+      ));
+      const codes = columns[col];
+      const codeTable = el("table");
+      Object.entries(codes).forEach(([code, label]) => {
+        codeTable.append(el("tr", {},
+          el("td", { class:"narrow" }, el("code", { text: code })),
+          el("td", {}, el("input", { type:"text", value: label, onchange: e => { codes[code] = e.target.value; } })),
+          el("td", { class:"narrow" }, el("button", { class:"icon", onclick: () => { delete codes[code]; render(); } }, "✕"))
+        ));
+      });
+      colBox.append(codeTable);
+      const codeInput = el("input", { type:"text", placeholder:"code, e.g. T" });
+      const labelInput = el("input", { type:"text", placeholder:"label, e.g. T&M (Time & Materials)" });
+      colBox.append(el("div", { class:"add-row" }, codeInput, labelInput, el("button", { class:"btn", onclick: () => {
+        if (!codeInput.value.trim()) return;
+        codes[codeInput.value.trim()] = labelInput.value.trim();
+        render();
+      }}, "Add code")));
+      panel.append(colBox);
+    });
+
+    const colSel = tableOrTextInput(table, "", () => {});
+    panel.append(el("div", { class:"add-row" }, colSel, el("button", { class:"btn", onclick: () => {
+      if (!colSel.value) return;
+      if (!columns[colSel.value]) columns[colSel.value] = {};
+      render();
+    }}, "Add column")));
+    wrap.append(panel);
+  });
+
+  const addPanel = el("div", { class:"panel" });
+  addPanel.append(el("h3", { text:"Add table" }));
+  const tableSel = el("select", {}, option("", "table…"));
+  businessTables().filter(t => !config.fieldValues[t]).forEach(t => tableSel.appendChild(option(t)));
+  addPanel.append(el("div", { class:"add-row" }, tableSel, el("button", { class:"btn primary", onclick: () => {
+    if (!tableSel.value) return;
+    config.fieldValues[tableSel.value] = {};
+    render();
+  }}, "Add table")));
+  wrap.append(addPanel);
+  return wrap;
+}
+
+// ---- Filter sets ----
+function renderFilterSets(){
+  const wrap = el("div", {});
+  wrap.append(el("h2", { text:"Filter sets" }));
+  wrap.append(el("p", { class:"sub", text:"Per-filter-set visibility for the static reference tables (booking types, categories, etc.). \"All\" permits everything; otherwise each id is explicitly 0 (hidden) or 1 (visible)." }));
+
+  const ids = Object.keys(config.filterSets).sort((a,b) => Number(a)-Number(b));
+  if (!ids.length) wrap.append(el("div", { class:"panel" }, el("div", { class:"empty", text:"No filter sets yet." })));
+
+  ids.forEach(id => {
+    const fs = config.filterSets[id];
+    if (!fs.permittedValues) fs.permittedValues = {};
+    const panel = el("div", { class:"panel" });
+    panel.append(el("div", { style:"display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;" },
+      el("h3", { style:"margin:0", text:`Filter set ${id}` }),
+      el("button", { class:"icon", title:"Remove filter set", onclick: () => { delete config.filterSets[id]; render(); } }, "✕")
+    ));
+
+    Object.keys(fs.permittedValues).forEach(table => {
+      const value = fs.permittedValues[table];
+      const isAll = value === "all";
+      const box = el("div", { class:"fs-table" });
+      box.append(el("div", { class:"fs-table-head" },
+        el("code", { text:table }),
+        el("button", { class:"icon", title:"Remove table from this filter set", onclick: () => { delete fs.permittedValues[table]; render(); } }, "✕")
+      ));
+      box.append(el("label", { class:"toggle" },
+        el("input", { type:"checkbox", checked: isAll || null, onchange: e => {
+          fs.permittedValues[table] = e.target.checked ? "all" : {};
+          render();
+        }}),
+        "All values permitted"
+      ));
+      if (!isAll){
+        const ids2 = Object.entries(value || {});
+        ids2.forEach(([recId, permitted]) => {
+          box.append(el("div", { class:"id-row" },
+            el("code", { text:`id ${recId}` }),
+            el("label", {}, el("input", { type:"checkbox", checked: permitted ? "checked" : null, onchange: e => { value[recId] = e.target.checked ? 1 : 0; } }), " permitted"),
+            el("button", { class:"icon", onclick: () => { delete value[recId]; render(); } }, "✕")
+          ));
+        });
+        const newId = el("input", { type:"text", placeholder:"id" });
+        box.append(el("div", { class:"add-row" }, newId, el("button", { class:"btn", onclick: () => {
+          if (!newId.value.trim()) return;
+          value[newId.value.trim()] = 1;
+          render();
+        }}, "Add id")));
+      }
+      panel.append(box);
+    });
+
+    const tableSel = el("select", {}, option("", "add table…"));
+    businessTables().filter(t => !fs.permittedValues[t]).forEach(t => tableSel.appendChild(option(t)));
+    panel.append(el("div", { class:"add-row" }, tableSel, el("button", { class:"btn", onclick: () => {
+      if (!tableSel.value) return;
+      fs.permittedValues[tableSel.value] = "all";
+      render();
+    }}, "Add table")));
+    wrap.append(panel);
+  });
+
+  const addPanel = el("div", { class:"panel" });
+  addPanel.append(el("h3", { text:"Add filter set" }));
+  const nextId = (Math.max(0, ...ids.map(Number)) + 1).toString();
+  const idInput = el("input", { type:"text", value: nextId });
+  addPanel.append(el("div", { class:"add-row" }, idInput, el("button", { class:"btn primary", onclick: () => {
+    if (!idInput.value.trim() || config.filterSets[idInput.value.trim()]) return;
+    config.filterSets[idInput.value.trim()] = { permittedValues: {} };
+    render();
+  }}, "Add filter set")));
+  wrap.append(addPanel);
+  return wrap;
+}
+
+// ---- Role permissions ----
+function renderRolePermissions(){
+  const wrap = el("div", {});
+  wrap.append(el("h2", { text:"Role permissions" }));
+  wrap.append(el("p", { class:"sub", text:"Per SPP role id, per table: read/create/update/delete. Optional -- leaving this out entirely denies every write by default, without affecting reads." }));
+
+  const ids = Object.keys(config.rolePermissions).sort((a,b) => Number(a)-Number(b));
+  if (!ids.length) wrap.append(el("div", { class:"panel" }, el("div", { class:"empty", text:"No roles configured yet." })));
+
+  ids.forEach(id => {
+    const role = config.rolePermissions[id];
+    if (!role.permissions) role.permissions = {};
+    const collapsed = collapsedRoles.has(id);
+    const panel = el("div", { class:"panel" });
+    const nameInput = el("input", { type:"text", value: role.name || "", placeholder:"role name", onchange: e => role.name = e.target.value });
+    const tableCount = Object.keys(role.permissions).length;
+    const writableCount = Object.values(role.permissions).filter(p => p.create || p.update || p.delete).length;
+    panel.append(el("div", { style:"display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; gap:10px;" },
+      el("div", { style:"display:flex; gap:8px; align-items:center;" },
+        el("button", { class:"icon", title: collapsed ? "Expand" : "Collapse", style:"font-size:12px;", onclick: () => {
+          if (collapsed) collapsedRoles.delete(id); else collapsedRoles.add(id);
+          render();
+        }}, collapsed ? "▸" : "▾"),
+        el("code", { text:`role ${id}` }), nameInput,
+        collapsed ? el("span", { class:"sub", style:"margin:0;", text:`${tableCount} table${tableCount===1?"":"s"}, ${writableCount} writable` }) : null
+      ),
+      el("button", { class:"icon", title:"Remove role", onclick: () => { delete config.rolePermissions[id]; render(); } }, "✕")
+    ));
+
+    if (collapsed){ wrap.append(panel); return; }
+
+    // A column header's own checkbox reflects "every row currently checked
+    // for this action," and toggling it sets every row at once -- lets you
+    // flip e.g. every table's "read" on/off in one click instead of
+    // clicking down the whole column by hand.
+    function actionHeader(action, label){
+      const tables = Object.keys(role.permissions);
+      const allChecked = tables.length > 0 && tables.every(t => role.permissions[t][action]);
+      return el("th", {}, el("label", {},
+        label,
+        el("input", { type:"checkbox", checked: allChecked || null, onchange: e => {
+          tables.forEach(t => role.permissions[t][action] = e.target.checked ? 1 : 0);
+          render();
+        }})
+      ));
+    }
+
+    const grid = el("table", { class:"role-grid" });
+    grid.append(el("tr", {}, el("th", { text:"Table" }), actionHeader("read","Read"), actionHeader("create","Create"), actionHeader("update","Update"), actionHeader("delete","Delete"), el("th", {})));
+    Object.keys(role.permissions).sort().forEach(table => {
+      const perms = role.permissions[table];
+      const row = el("tr", {}, el("td", { text:table }));
+      ["read","create","update","delete"].forEach(action => {
+        row.append(el("td", {}, el("input", { type:"checkbox", checked: perms[action] ? "checked" : null, onchange: e => perms[action] = e.target.checked ? 1 : 0 })));
+      });
+      row.append(el("td", {}, el("button", { class:"icon", onclick: () => { delete role.permissions[table]; render(); } }, "✕")));
+      grid.append(row);
+    });
+    panel.append(grid);
+
+    const tableSel = el("select", {}, option("", "add table…"));
+    businessTables().filter(t => !role.permissions[t]).forEach(t => tableSel.appendChild(option(t)));
+    panel.append(el("div", { class:"add-row" }, tableSel, el("button", { class:"btn", onclick: () => {
+      if (!tableSel.value) return;
+      role.permissions[tableSel.value] = { read:1, create:0, update:0, delete:0 };
+      render();
+    }}, "Add table")));
+    wrap.append(panel);
+  });
+
+  const addPanel = el("div", { class:"panel" });
+  addPanel.append(el("h3", { text:"Add role" }));
+  const idInput = el("input", { type:"text", placeholder:"SPP role id, e.g. 1" });
+  const nameInput = el("input", { type:"text", placeholder:"role name" });
+  addPanel.append(el("div", { class:"add-row" }, idInput, nameInput, el("button", { class:"btn primary", onclick: () => {
+    const id = idInput.value.trim();
+    if (!id || config.rolePermissions[id]) return;
+    // Every table starts readable -- a new role is almost always "can see
+    // everything, can't change anything yet" rather than blind to tables
+    // nobody's gotten around to adding; create/update/delete still default
+    // off, same fail-closed-on-writes posture as adding one table at a time.
+    const permissions = {};
+    businessTables().forEach(t => permissions[t] = { read:1, create:0, update:0, delete:0 });
+    config.rolePermissions[id] = { name: nameInput.value.trim(), permissions };
+    render();
+  }}, "Add role")));
+  wrap.append(addPanel);
+  return wrap;
+}
+
+// ---- nav wiring ----
+document.querySelectorAll("nav button[data-tab]").forEach(btn => {
+  btn.addEventListener("click", () => { activeTab = btn.dataset.tab; render(); });
+});
+
+render();
+</script>
+</body>
+</html>

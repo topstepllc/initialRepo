@@ -2,10 +2,12 @@
 // all required, none sufficient alone -- see the write-feature design
 // discussion for why each exists separately:
 //   (a) row-visibility -- can this person even reference/see the record at
-//       all, reusing the SAME scoped DuckDB views filterScope.js already
-//       built this request (never the "_raw" tables)
-//   (b) role-based CRUD -- does their SPP role (users.role_id) permit this
-//       action on this table, per the hand-curated rolePermissions data
+//       all, reusing the SAME row scoping filterScope.js already built this
+//       request (via rowScopedSource -- "_raw" only for a table with no row
+//       scoping of its own)
+//   (b) role-based CRUD -- does their SPP role (users.role_id) permit
+//       reading this table AND this action on it, per the hand-curated
+//       rolePermissions data
 //   (c) global platform capability -- is this action even possible on this
 //       table via SPP's API at all, regardless of role (sppWriteClient.js)
 //
@@ -23,10 +25,15 @@ function sqlQuote(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
 }
 
+// Row visibility only -- reads the caller's row-scoped data directly rather
+// than the public "<table>" view, which doesn't exist at all when the
+// caller's role can't read that table. Table-level read access is checked
+// separately (checkAllLayers, for the table being written); a referenced
+// table only needs its row to be in scope, not the table itself readable.
 async function isVisibleInScopedView(connection, table, id) {
   try {
     const reader = await connection.runAndReadAll(
-      `SELECT 1 AS found FROM "${table}" WHERE CAST(id AS VARCHAR) = ${sqlQuote(String(id))} LIMIT 1`,
+      `SELECT 1 AS found FROM "${filterScope.rowScopedSource(table)}" WHERE CAST(id AS VARCHAR) = ${sqlQuote(String(id))} LIMIT 1`,
     );
     const rows = await reader.getRowObjects();
     return rows.length > 0;
@@ -75,6 +82,15 @@ async function checkAllLayers({ connection, email, table, action, recordId, fiel
   }
 
   const roleId = await filterScope.getUserRoleId(connection, email);
+  // Writing requires reading -- a role that can't see a table can't change
+  // it, whatever its create/update/delete flags say.
+  if (!reportEngine.resolveRolePermission(roleId, table, "read")) {
+    return {
+      allowed: false,
+      reason: `Your SPP role does not permit access to "${table}".`,
+      roleId,
+    };
+  }
   if (!reportEngine.resolveRolePermission(roleId, table, action)) {
     return {
       allowed: false,

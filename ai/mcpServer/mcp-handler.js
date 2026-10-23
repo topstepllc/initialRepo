@@ -89,8 +89,11 @@ async function handleMcpRequest(event) {
     });
   }
 
-  const toolName = message.method === "tools/call" ? message.params?.name : undefined;
-  console.log(`MCP method: ${message.method}${toolName ? ` (tool: ${toolName})` : ""}`);
+  const toolName =
+    message.method === "tools/call" ? message.params?.name : undefined;
+  console.log(
+    `MCP method: ${message.method}${toolName ? ` (tool: ${toolName})` : ""}`,
+  );
 
   // Fast path: sync_spp_access and check_spp_access_status never touch
   // DuckDB/materialized SPP data at all -- only the OAuth token store, the
@@ -109,7 +112,10 @@ async function handleMcpRequest(event) {
   // consistently landed at 35-54s total -- comfortably past API Gateway's
   // hard 30-second integration timeout, which is what actually surfaced as
   // "Couldn't connect to the server" / a hung tool call from Claude's side.
-  if (toolName === "sync_spp_access" || toolName === "check_spp_access_status") {
+  if (
+    toolName === "sync_spp_access" ||
+    toolName === "check_spp_access_status"
+  ) {
     const claims = event.requestContext?.authorizer?.jwt?.claims;
     const email = claims?.email || claims?.username;
     let result;
@@ -146,9 +152,12 @@ async function handleMcpRequest(event) {
   const claims = event.requestContext?.authorizer?.jwt?.claims;
   const email = claims?.email || claims?.username;
   if (!email) {
-    console.log("No email/username claim on this request. Full claims:", JSON.stringify(claims));
+    console.log(
+      "No email/username claim on this request. Full claims:",
+      JSON.stringify(claims),
+    );
   }
-  const { hasSyncedAccess } = await applyFilterScope(connection, email);
+  const { hasSyncedAccess, readableTables } = await applyFilterScope(connection, email);
 
   const server = new McpServer(
     { name: "spp-data", version: "1.0.0" },
@@ -157,7 +166,7 @@ async function handleMcpRequest(event) {
       instructions: FULL_INSTRUCTIONS,
     },
   );
-  registerTools(server, connection, timings, email, hasSyncedAccess);
+  registerTools(server, connection, timings, email, hasSyncedAccess, readableTables);
 
   const transport = new LambdaTransport();
   await server.connect(transport);
@@ -183,7 +192,9 @@ async function handleMcpRequest(event) {
 // without needing a live SPP round-trip per question.
 async function handleRefreshFilterCache() {
   const emails = await filterCache.listConnectedEmails();
-  console.log(`Refreshing SPP filter cache for ${emails.length} connected user(s).`);
+  console.log(
+    `Refreshing SPP filter cache for ${emails.length} connected user(s).`,
+  );
 
   const results = await Promise.allSettled(
     emails.map(async (email) => {
@@ -201,7 +212,10 @@ async function handleRefreshFilterCache() {
     );
   }
 
-  return { statusCode: 200, body: JSON.stringify({ refreshed: emails.length, failed: failures.length }) };
+  return {
+    statusCode: 200,
+    body: JSON.stringify({ refreshed: emails.length, failed: failures.length }),
+  };
 }
 
 // Invoked on a schedule (EventBridge rule, see mcp-server-infra.yaml) with
@@ -226,13 +240,16 @@ async function handleKeepWarm() {
   const region = process.env.AWS_REGION || "us-east-2";
   const t0 = Date.now();
   await setupConnection(region, {});
-  return { statusCode: 200, body: JSON.stringify({ warmedInMs: Date.now() - t0 }) };
+  return {
+    statusCode: 200,
+    body: JSON.stringify({ warmedInMs: Date.now() - t0 }),
+  };
 }
 
 // Invoked directly (same bypass-API-Gateway mechanism as the two actions
 // above) with {"action": "forceRefresh"} -- manually forces the staleness
 // check that would otherwise only run once every STALENESS_CHECK_INTERVAL_MS
-// (5 minutes) on a warm container, so a report_config.json/CSV edit takes
+// (5 minutes) on a warm container, so a stepwise_config.json/CSV edit takes
 // effect immediately instead of waiting out that interval. Only reaches
 // WHICHEVER container this particular invoke happens to land on -- under
 // real concurrent traffic there could be more than one warm container, and
@@ -245,7 +262,10 @@ async function handleForceRefresh() {
   const timings = {};
   const t0 = Date.now();
   await setupConnection(region, timings, { forceStalenessCheck: true });
-  return { statusCode: 200, body: JSON.stringify({ tookMs: Date.now() - t0, ...timings }) };
+  return {
+    statusCode: 200,
+    body: JSON.stringify({ tookMs: Date.now() - t0, ...timings }),
+  };
 }
 
 exports.handler = async (event) => {
@@ -265,16 +285,22 @@ exports.handler = async (event) => {
   console.log(`Request: ${method} ${rawPath}`);
 
   try {
-    if (method === "GET" && rawPath === "/.well-known/oauth-protected-resource") {
+    if (
+      method === "GET" &&
+      rawPath === "/.well-known/oauth-protected-resource"
+    ) {
       return oauthEndpoints.protectedResourceMetadata();
     }
 
-    if (method === "GET" && rawPath === "/.well-known/oauth-authorization-server") {
+    if (
+      method === "GET" &&
+      rawPath === "/.well-known/oauth-authorization-server"
+    ) {
       return oauthEndpoints.authorizationServerMetadata();
     }
 
     if (method === "POST" && rawPath === "/register") {
-      return oauthEndpoints.registerClient(event.body);
+      return await oauthEndpoints.registerClient(event.body);
     }
 
     if (rawPath === "/mcp") {

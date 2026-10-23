@@ -15,20 +15,27 @@
  *   - source-file / attachment lifecycle (workspace move, delete) --
  *     N/A here since the browser tool replaces the file-drop workflow
  *
- * DRY_RUN: set to true (default) to log every writeObj that WOULD be sent
- * to tslib-putRecords without actually calling it. Set to false once
- * you're ready to actually write. All reads (fetchOne / tslib-getRecords)
- * still run either way, so validation errors (bad target task, etc.)
- * still surface in dry-run mode.
+ * DIFFERENCES FROM move_time.js (intentional):
+ *   - Partial moves create the new entry BEFORE shrinking the original, so
+ *     a failure can never make hours disappear (see processMovement).
+ *   - Full moves also set customerid from the target project, so an entry
+ *     moved to another customer's project doesn't keep the old customer.
+ *   - Remaining hours are rounded to 2 decimals (avoids 5.8999999...).
+ *   - If phaseTarget is sent, the target task must sit directly under that
+ *     phase ("0" = directly on the project).
  *
- * SPP_LOG_WORKSPACE_ID: if set, a CSV audit log of the batch (one row per
- * movement attempted, including failures) is written as a new Attachment
- * to this SPP workspace after processing. If unset, logging is skipped
- * entirely (no guessing at a workspace). Also skipped while DRY_RUN.
+ * DRY_RUN: currently false -- writes are LIVE. Set to true to log every
+ * writeObj that WOULD be sent to tslib-putRecords without calling it. All
+ * reads (fetchOne / tslib-getRecords) still run either way, so validation
+ * errors (bad target task, etc.) still surface in dry-run mode.
+ *
+ * Audit log: after processing, a CSV of the batch (one row per movement
+ * attempted, including failures) is written as a new Attachment to the SPP
+ * workspace set in writeLogToWorkspace. Skipped while DRY_RUN.
  *
  * ---------------------------------------------------------------------
- * Expected request body (POST), shape TBD/owned by us -- submitTimeMovements()
- * on the front end still needs to be wired to build this:
+ * Expected request body (POST), built by submitTimeMovements() /
+ * buildMovementPayload() in the front end:
  *
  * {
  *   "movements": [
@@ -36,10 +43,11 @@
  *       "teId": "10482",        // original time entry (Task) id -- required
  *       "tsId": "998",          // timesheet id -- required for a partial move's new entry
  *       "userId": "251",        // required for a partial move's new entry
- *       "date": "2026/08/14",   // YYYY/MM/DD -- required for a partial move's new entry
+ *       "date": "8/25/2025",    // M/D/YYYY as exported by SPP -- required for a partial move's new entry
  *       "notes": "",            // optional, carried onto a partial move's new entry
  *       "hours": "8",           // original entry's total hours (hoursRefHeader) -- required
  *       "projTarget": "5521",   // destination project id -- required
+ *       "phaseTarget": "7710",  // destination phase id, "0" = no phase -- optional; validated if sent
  *       "taskTarget": "88231",  // destination project task id -- required
  *       "timeToMove": "3"       // hours being moved -- required
  *     }
@@ -59,7 +67,7 @@
  * ---------------------------------------------------------------------
  ******************************************************/
 
-const DRY_RUN = false; // <-- flip to false once you're ready to actually write
+const DRY_RUN = false; // live writes; set to true to log writes without making them
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*', // tighten to your hosting origin once deployed
@@ -74,6 +82,8 @@ function jsonResponse(statusCode, payload) {
     body: JSON.stringify(payload),
   };
 }
+
+const round2 = (n) => Math.round(n * 100) / 100;
 
 export const handler = async (event) => {
   if (event?.requestContext?.http?.method === 'OPTIONS') {
@@ -113,7 +123,12 @@ export const handler = async (event) => {
       const outcome = await processMovement(movement, authObj, callSharedUtil);
       results.push({ teId: movement.teId, status: outcome.type, ...outcome });
     } catch (err) {
-      results.push({ teId: movement.teId, status: "error", message: err.message });
+      results.push({
+        teId: movement.teId,
+        status: "error",
+        message: err.message,
+        ...(err.createdId ? { createdId: err.createdId } : {}),
+      });
     }
   }
 
@@ -133,6 +148,7 @@ export const handler = async (event) => {
  ******************************************************/
 async function processMovement(movement, authObj, callSharedUtil) {
   const { teId, tsId, userId, date, notes, projTarget, taskTarget } = movement;
+  const phaseTarget = String(movement.phaseTarget ?? "").trim();
 
   console.log(`--- Processing movement for teId ${teId} --- input: ${JSON.stringify(movement)}`);
 
@@ -146,11 +162,16 @@ async function processMovement(movement, authObj, callSharedUtil) {
   if (!Number.isInteger(taskTargetNum) || taskTargetNum <= 0) {
     throw new Error(`invalid target task id: ${taskTarget}`);
   }
+  if (phaseTarget !== "" && !(Number.isInteger(Number(phaseTarget)) && Number(phaseTarget) >= 0)) {
+    throw new Error(`invalid target phase id: ${phaseTarget}`);
+  }
 
-  const hours = parseFloat(movement.hours);
-  const timeToMove = parseFloat(movement.timeToMove);
-  if (isNaN(hours) || hours <= 0) throw new Error(`invalid original hours: ${movement.hours}`);
-  if (isNaN(timeToMove) || timeToMove <= 0) throw new Error(`invalid time to move: ${movement.timeToMove}`);
+  const hoursRaw = parseFloat(movement.hours);
+  const timeToMoveRaw = parseFloat(movement.timeToMove);
+  if (isNaN(hoursRaw) || hoursRaw <= 0) throw new Error(`invalid original hours: ${movement.hours}`);
+  if (isNaN(timeToMoveRaw) || timeToMoveRaw <= 0) throw new Error(`invalid time to move: ${movement.timeToMove}`);
+  const hours = round2(hoursRaw);
+  const timeToMove = round2(timeToMoveRaw);
 
   // Confirms the target task actually belongs to the target project --
   // equivalent of move_time.js's getTask(taskTarget, projTarget).
@@ -165,14 +186,31 @@ async function processMovement(movement, authObj, callSharedUtil) {
   }
   console.log(`Target task fetched successfully: ${JSON.stringify(targetTask)}`);
 
-  const timeDiff = hours - timeToMove;
+  // Phase check: the task's parentid is the phase it sits directly under
+  // (0 = directly on the project). Only enforced when the front end sent a
+  // phase and the read actually returned parentid.
+  if (phaseTarget !== "" && targetTask.parentid !== undefined) {
+    const actualPhase = String(Number(targetTask.parentid || 0));
+    if (actualPhase !== String(Number(phaseTarget))) {
+      const where = actualPhase === "0" ? "directly on the project (no phase)" : `under phase ${actualPhase}`;
+      throw new Error(`target task ${taskTargetNum} is ${where}, not under the selected phase ${phaseTarget}`);
+    }
+  }
+
+  const timeDiff = round2(hours - timeToMove);
   if (timeDiff < 0) {
     throw new Error(`time to move (${timeToMove}) exceeds original entry's ${hours} hrs`);
   }
 
-  if (timeToMove !== hours) {
-    // --- Partial move: shrink the original entry, create a new one for
-    //     the moved portion -- mirrors move_time.js's partialMoveUpd / partialMoveAdd.
+  // Needed on both paths: customerid for the partial move's new entry, and
+  // for re-pointing the customer on a full move.
+  const targetProject = await fetchOne(callSharedUtil, authObj, "Project", { id: projTargetNum });
+  if (!targetProject) throw new Error(`target project ${projTargetNum} not found`);
+  console.log(`Target project fetched successfully: ${JSON.stringify(targetProject)}`);
+
+  if (timeDiff > 0) {
+    // --- Partial move: create a new entry for the moved portion, then shrink
+    //     the original -- mirrors move_time.js's partialMoveAdd / partialMoveUpd.
 
     // move_time.js reads `teRec.timetypeid` off a bare `new NSOA.record.oaTask(teId)`
     // without an explicit wsapi.read -- that only works via SuiteScript's lazy-load
@@ -180,17 +218,6 @@ async function processMovement(movement, authObj, callSharedUtil) {
     const originalEntry = await fetchOne(callSharedUtil, authObj, "Task", { id: teId });
     if (!originalEntry) throw new Error(`original time entry ${teId} not found`);
     console.log(`Original entry fetched successfully: ${JSON.stringify(originalEntry)}`);
-
-    // Same story for `targetProjRec.customerid`.
-    const targetProject = await fetchOne(callSharedUtil, authObj, "Project", { id: projTargetNum });
-    if (!targetProject) throw new Error(`target project ${projTargetNum} not found`);
-    console.log(`Target project fetched successfully: ${JSON.stringify(targetProject)}`);
-
-    const updateWriteObj = {
-      id: teId,
-      decimal_hours: timeDiff,
-    };
-    console.log(`[UPDATE original entry] Task writeObj: ${JSON.stringify(updateWriteObj)}`);
 
     const createWriteObj = {
       projectid: projTargetNum,
@@ -205,23 +232,43 @@ async function processMovement(movement, authObj, callSharedUtil) {
     };
     console.log(`[CREATE new entry] Task writeObj: ${JSON.stringify(createWriteObj)}`);
 
-    let updatedOriginal = null;
+    const updateWriteObj = {
+      id: teId,
+      decimal_hours: timeDiff,
+    };
+    console.log(`[UPDATE original entry] Task writeObj: ${JSON.stringify(updateWriteObj)}`);
+
     let createdEntry = null;
+    let updatedOriginal = null;
 
     if (!DRY_RUN) {
-      updatedOriginal = await callSharedUtil("tslib-putRecords", {
-        authObj,
-        recordType: "Task",
-        writeObj: updateWriteObj,
-      });
-      console.log(`Update result: ${JSON.stringify(updatedOriginal)}`);
-
+      // Create first: if it fails, nothing has changed. If the follow-up
+      // update fails, the moved hours exist twice (never zero times), and the
+      // error names both ids so it can be corrected by hand.
       createdEntry = await callSharedUtil("tslib-putRecords", {
         authObj,
         recordType: "Task",
         writeObj: createWriteObj,
       });
       console.log(`Create result: ${JSON.stringify(createdEntry)}`);
+
+      try {
+        updatedOriginal = await callSharedUtil("tslib-putRecords", {
+          authObj,
+          recordType: "Task",
+          writeObj: updateWriteObj,
+        });
+        console.log(`Update result: ${JSON.stringify(updatedOriginal)}`);
+      } catch (err) {
+        const createdId = createdEntry?.id ?? null;
+        const e = new Error(
+          `created new entry ${createdId ?? "(id unknown)"} with ${timeToMove} hrs, but failed to reduce ` +
+          `original entry ${teId} to ${timeDiff} hrs -- those hours are currently counted twice. ` +
+          `Fix entry ${teId} in SuiteProjects Pro before retrying this row. Cause: ${err.message}`
+        );
+        e.createdId = createdId;
+        throw e;
+      }
     }
 
     return {
@@ -232,12 +279,13 @@ async function processMovement(movement, authObj, callSharedUtil) {
     };
   }
 
-  // --- Full move: the whole entry just moves onto the new project/task in place --
-  //     mirrors move_time.js's fullMove branch (no new record, no customerid change).
+  // --- Full move: the whole entry moves onto the new project/task in place --
+  //     mirrors move_time.js's fullMove branch, plus the customer update.
   const fullMoveWriteObj = {
     id: teId,
     projectid: projTargetNum,
     projecttaskid: taskTargetNum,
+    customerid: targetProject.customerid,
   };
   console.log(`[FULL MOVE] Task writeObj: ${JSON.stringify(fullMoveWriteObj)}`);
 
@@ -287,8 +335,6 @@ function normalizeDateForSpp(dateStr) {
  * Post-batch audit log: writes one CSV, one row per movement attempted
  * (including failures), as a new Attachment record in an SPP workspace.
  *
- * Requires SPP_LOG_WORKSPACE_ID to be set -- if it isn't, logging is just
- * skipped rather than guessing a workspace and writing to the wrong place.
  * This is best-effort: a failure here is reported in the response's
  * `logFile` field but never overwrites/blocks the actual `results`.
  *
@@ -305,7 +351,7 @@ function csvEscape(value) {
 function buildResultsCsv(movements, results) {
   const resultsByTeId = new Map(results.map(r => [String(r.teId), r]));
   const header = [
-    "teId", "status", "projTarget", "taskTarget", "hours", "timeToMove",
+    "teId", "status", "projTarget", "phaseTarget", "taskTarget", "hours", "timeToMove",
     "updatedId", "createdId", "message", "timestamp",
   ];
   const timestamp = new Date().toISOString();
@@ -313,7 +359,7 @@ function buildResultsCsv(movements, results) {
   const rows = movements.map(m => {
     const r = resultsByTeId.get(String(m.teId)) || {};
     return [
-      m.teId, r.status || "", m.projTarget, m.taskTarget, m.hours, m.timeToMove,
+      m.teId, r.status || "", m.projTarget, m.phaseTarget ?? "", m.taskTarget, m.hours, m.timeToMove,
       r.updatedId ?? "", r.createdId ?? "", r.message || "", timestamp,
     ].map(csvEscape).join(",");
   });

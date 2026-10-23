@@ -24,11 +24,29 @@
 // person's request independently. Renaming the raw table once (idempotent,
 // self-healing after reportEngine.js re-materializes it) gives the view a stable,
 // unshadowed source to always select from.
+//
+// Role-based table visibility (stepwise_config.json's rolePermissions
+// "read" flag) is layered on top of all of the above: EVERY table -- not
+// just the scoped ones -- gets its raw table renamed to "<name>_raw", and
+// the public "<name>" view only exists for this request if the caller's
+// role has an explicit read:1 for that table. Anything else (no role, role
+// not in rolePermissions, table not listed for the role, read != 1) hides
+// the table entirely -- fail closed, per the user's requirement that every
+// (role, table) pair be deliberately curated. Row scoping for a scoped
+// table is built under an internal "<name>_scoped" view that cascade
+// conditions reference, so a downstream table the caller CAN read (e.g.
+// tasks) is still restricted to permitted projects even when the caller's
+// role can't read the projects table itself -- each table's visibility is
+// decided independently.
 
 const { getCachedPermittedIds } = require("./filterCache.js");
 const {
   resolveFilterSetPermittedValues,
   getScopingPlan,
+  getAllViewNames,
+  resolveRolePermission,
+  performExecuteQuery,
+  ToolInputError,
 } = require("./reportEngine.js");
 
 const SCOPED_RECORD_TYPES = ["projects", "users", "customers"];
@@ -36,7 +54,7 @@ const SCOPED_RECORD_TYPES = ["projects", "users", "customers"];
 // Small SPP reference tables the REST API doesn't expose with filter-set
 // enforcement (unlike SCOPED_RECORD_TYPES above), so they're scoped from a
 // hand-curated static config instead of a live per-user REST fetch -- see
-// reportEngine.js's resolveFilterSetPermittedValues/report_config.json's
+// reportEngine.js's resolveFilterSetPermittedValues/stepwise_config.json's
 // filterSets section. Extend this once a table is both synced (present in
 // REPORT_VIEWS) AND curated in filterSets -- payroll type is known to be
 // coming but isn't curated yet.
@@ -58,7 +76,7 @@ const STATIC_SCOPED_RECORD_TYPES = [
 // reference the project. Recomputed fresh per request (cheap -- confirmed
 // via direct timing against the real relationships graph, single-digit
 // milliseconds even for the deepest/largest tables) rather than cached, so
-// it never needs separate invalidation when report_config.json changes.
+// it never needs separate invalidation when stepwise_config.json changes.
 function computeScopingPlan() {
   return getScopingPlan([...SCOPED_RECORD_TYPES, ...STATIC_SCOPED_RECORD_TYPES]);
 }
@@ -109,10 +127,11 @@ function staticWhereClause(permitted) {
 }
 
 // Same lookup as getPrimaryFilterSetId below, for the caller's role_id
-// instead of their primary_filter_set -- used by sppWritePermissions.js to
-// gate write actions via reportEngine.resolveRolePermission. Same
-// fail-closed-to-null reasoning: an unresolved role is exactly the case
-// resolveRolePermission already treats as "deny".
+// instead of their primary_filter_set -- used by applyFilterScope (table
+// read visibility) and sppWritePermissions.js (write actions), both via
+// reportEngine.resolveRolePermission. Same fail-closed-to-null reasoning:
+// an unresolved role is exactly the case resolveRolePermission already
+// treats as "deny".
 async function getUserRoleId(connection, email) {
   try {
     const reader = await connection.runAndReadAll(`
@@ -197,7 +216,13 @@ function baseWhereClause(table, cached, filterSetId) {
 // anything cascading from them) resolve to zero rows. Fail closed
 // everywhere, never fail open.
 //
-// Returns { hasSyncedAccess }: whether a REST filter cache entry exists at
+// Returns { hasSyncedAccess, readableTables }. readableTables is every
+// table whose public view was actually created for this caller (role
+// permits read AND the view built successfully) -- callers use it to hide
+// everything else from get_spp_schemas/get_spp_field_values/the write
+// tools' table list, so a hidden table's name never reaches the model.
+//
+// hasSyncedAccess: whether a REST filter cache entry exists at
 // all for this email. This matters because an empty result set looks
 // identical to the agent whether the person isn't connected/synced yet or
 // is connected with genuinely zero permitted rows -- there is no way to
@@ -209,12 +234,14 @@ function baseWhereClause(table, cached, filterSetId) {
 // just the affected tables without affecting this flag.
 async function applyFilterScope(connection, email) {
   const plan = computeScopingPlan();
-  await ensureRawTablesRenamed(connection, plan.map((step) => step.table));
+  const allTables = getAllViewNames();
+  await ensureRawTablesRenamed(connection, allTables);
 
   const cached = email ? await getCachedPermittedIds(email) : null;
   const filterSetId = email
     ? await getPrimaryFilterSetId(connection, email)
     : null;
+  const roleId = email ? await getUserRoleId(connection, email) : null;
 
   for (const { table, cascadeConditions } of plan) {
     // Isolated per table on purpose -- applyFilterScope runs unconditionally
@@ -251,11 +278,11 @@ async function applyFilterScope(connection, email) {
       // something that risks hiding a legitimately-zero-id row.
       const cascadeClauses = cascadeConditions.map(
         ({ column, referencesTable }) =>
-          `(CAST("${column}" AS VARCHAR) IS NULL OR CAST("${column}" AS VARCHAR) = '0' OR CAST("${column}" AS VARCHAR) IN (SELECT CAST(id AS VARCHAR) FROM "${referencesTable}"))`,
+          `(CAST("${column}" AS VARCHAR) IS NULL OR CAST("${column}" AS VARCHAR) = '0' OR CAST("${column}" AS VARCHAR) IN (SELECT CAST(id AS VARCHAR) FROM "${referencesTable}_scoped"))`,
       );
       const whereClause = [base, ...cascadeClauses].join(" AND ");
       await connection.run(
-        `CREATE OR REPLACE VIEW "${table}" AS SELECT * FROM "${table}_raw" WHERE ${whereClause}`,
+        `CREATE OR REPLACE VIEW "${table}_scoped" AS SELECT * FROM "${table}_raw" WHERE ${whereClause}`,
       );
     } catch (error) {
       console.log(`Could not scope "${table}" -- failing it closed (empty), so anything that references it downstream fails closed too instead of hitting a "table does not exist" error: ${error.message}`);
@@ -268,18 +295,95 @@ async function applyFilterScope(connection, email) {
       // it in the plan with "Table with name X does not exist", instead of
       // each one failing closed independently and visibly).
       try {
-        await connection.run(`CREATE OR REPLACE VIEW "${table}" AS SELECT * FROM "${table}_raw" WHERE FALSE`);
+        await connection.run(`CREATE OR REPLACE VIEW "${table}_scoped" AS SELECT * FROM "${table}_raw" WHERE FALSE`);
       } catch (fallbackError) {
         console.log(`Could not even build a fail-closed empty view for "${table}": ${fallbackError.message}`);
       }
     }
   }
 
-  return { hasSyncedAccess: cached !== null };
+  // Public views: one per table the caller's role can read, selecting from
+  // the row-scoped view if the table has one, or straight from the raw
+  // table if it has no row scoping of its own. Every other table's public
+  // name is dropped -- this connection is reused across callers in a warm
+  // container, so the previous caller's view must not survive.
+  const scopedTables = new Set(plan.map((step) => step.table));
+  const readableTables = [];
+  for (const table of allTables) {
+    const source = scopedTables.has(table) ? `${table}_scoped` : `${table}_raw`;
+    try {
+      if (resolveRolePermission(roleId, table, "read")) {
+        await connection.run(`CREATE OR REPLACE VIEW "${table}" AS SELECT * FROM "${source}"`);
+        readableTables.push(table);
+      } else {
+        await connection.run(`DROP VIEW IF EXISTS "${table}"`);
+      }
+    } catch (error) {
+      console.log(`Could not build public view for "${table}" -- hiding it: ${error.message}`);
+      try {
+        await connection.run(`DROP VIEW IF EXISTS "${table}"`);
+      } catch {}
+    }
+  }
+  console.log(
+    `Role-based visibility for ${email} (role ${roleId ?? "unresolved"}): ${readableTables.length} of ${allTables.length} table(s) readable`,
+  );
+
+  return { hasSyncedAccess: cached !== null, readableTables };
+}
+
+// The internal object holding a table's row-scoped rows for the current
+// caller, regardless of whether their role can read the table itself --
+// "<name>_scoped" if the table has row scoping, "<name>_raw" if it doesn't.
+// For sppWritePermissions.js's record-visibility checks, which are about
+// row access, not table visibility (that's checked separately, via role).
+function rowScopedSource(table) {
+  return computeScopingPlan().some((step) => step.table === table)
+    ? `${table}_scoped`
+    : `${table}_raw`;
+}
+
+// Every table's real data lives under "<name>_raw" (and row-scoped data
+// under "<name>_scoped"), with only "<name>" exposed -- and only for tables
+// the caller's role can read. Those internal names live in the same DuckDB
+// connection the model's SQL runs against, so without this a query could
+// name them directly and bypass both role visibility and row scoping.
+// DuckDB also volunteers them unprompted: a query against a hidden table
+// fails with "did you mean <name>_raw?", which performExecuteQuery's own
+// error handling tells the model to act on. So: reject any SQL that names
+// one, and scrub them from any error text passed back. Every model-supplied
+// SQL statement (execute_spp_query, propose_spp_batch_write's sql) goes
+// through this, never performExecuteQuery directly.
+function internalNamePattern() {
+  const names = getAllViewNames().flatMap((name) => [`${name}_raw`, `${name}_scoped`]);
+  if (names.length === 0) return null;
+  const escaped = names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(`\\b(${escaped.join("|")})\\b`, "gi");
+}
+
+async function executeScopedQuery(connection, sql, timings) {
+  const pattern = internalNamePattern();
+  if (pattern && pattern.test(sql)) {
+    console.log(`Rejected query: referenced an internal table name. SQL: ${sql}`);
+    throw new ToolInputError(
+      "That table is not available. Use only the table names returned by get_spp_schemas.",
+    );
+  }
+  try {
+    return await performExecuteQuery(connection, sql, timings);
+  } catch (error) {
+    if (pattern) {
+      pattern.lastIndex = 0;
+      error.message = error.message.replace(pattern, "[unavailable]");
+    }
+    throw error;
+  }
 }
 
 module.exports = {
   applyFilterScope,
+  rowScopedSource,
+  executeScopedQuery,
   SCOPED_RECORD_TYPES,
   STATIC_SCOPED_RECORD_TYPES,
   // Consumed by ai/mcpServer/sppWritePermissions.js for role-based write

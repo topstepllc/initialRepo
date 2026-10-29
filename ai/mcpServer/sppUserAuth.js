@@ -106,7 +106,11 @@ async function ensurePerUserOAuthConfig(email) {
           // future potentially ChatGPT or any other MCP client), and a bare
           // "https://claude.ai/" redirect just dumped them on a new,
           // unrelated Claude session instead of back where they came from.
-          success_redirect_uri: "https://topstep-ai-offering.s3.us-east-2.amazonaws.com/static/spp-connected.html",
+          // Per-account via SPP_CONNECTED_URL (that page lives in each
+          // account's own data bucket); default is the original account's.
+          success_redirect_uri:
+            process.env.SPP_CONNECTED_URL ||
+            "https://topstep-ai-offering.s3.us-east-2.amazonaws.com/static/spp-connected.html",
         }),
         ConditionExpression: "attribute_not_exists(pk)",
       }),

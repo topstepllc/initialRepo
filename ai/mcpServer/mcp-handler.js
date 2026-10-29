@@ -157,7 +157,7 @@ async function handleMcpRequest(event) {
       JSON.stringify(claims),
     );
   }
-  const { hasSyncedAccess } = await applyFilterScope(connection, email);
+  const { hasSyncedAccess, readableTables } = await applyFilterScope(connection, email);
 
   const server = new McpServer(
     { name: "spp-data", version: "1.0.0" },
@@ -166,7 +166,7 @@ async function handleMcpRequest(event) {
       instructions: FULL_INSTRUCTIONS,
     },
   );
-  registerTools(server, connection, timings, email, hasSyncedAccess);
+  registerTools(server, connection, timings, email, hasSyncedAccess, readableTables);
 
   const transport = new LambdaTransport();
   await server.connect(transport);
@@ -249,7 +249,7 @@ async function handleKeepWarm() {
 // Invoked directly (same bypass-API-Gateway mechanism as the two actions
 // above) with {"action": "forceRefresh"} -- manually forces the staleness
 // check that would otherwise only run once every STALENESS_CHECK_INTERVAL_MS
-// (5 minutes) on a warm container, so a report_config.json/CSV edit takes
+// (5 minutes) on a warm container, so a stepwise_config.json/CSV edit takes
 // effect immediately instead of waiting out that interval. Only reaches
 // WHICHEVER container this particular invoke happens to land on -- under
 // real concurrent traffic there could be more than one warm container, and

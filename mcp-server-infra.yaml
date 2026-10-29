@@ -92,6 +92,26 @@ Parameters:
       customers sharing it would see and could overwrite each other's
       terminology definitions.
 
+  CreateTermsTable:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >
+      "true" creates TermsTableName in this stack (key: term, String). The
+      original account's aiTerms* tables were made by hand before this
+      existed, so its stacks leave this "false"; a fresh account sets it
+      "true" so every customer gets their own table without a manual step.
+
+  DataBucket:
+    Type: String
+    Default: topstep-ai-offering
+    Description: >
+      S3 bucket holding spp-data/{SppInstanceName}/... and
+      static/spp-connected.html. Must match the sibling
+      spp-data-sync-infra.yaml stack's DataBucket. S3 names are global, so
+      any account other than the original one needs its own (see
+      account-bootstrap.yaml).
+
   SppBaseOAuthConfigKey:
     Type: String
     Description: >
@@ -148,7 +168,25 @@ Parameters:
       account's spp-mcp-server stack uses "-rbreaux-2fb4" while its sibling
       spp-data-sync-infra stack uses "-rbreaux-2f4b").
 
+Conditions:
+  ShouldCreateTermsTable: !Equals [!Ref CreateTermsTable, "true"]
+
 Resources:
+  TermsTable:
+    Type: AWS::DynamoDB::Table
+    Condition: ShouldCreateTermsTable
+    Properties:
+      TableName: !Ref TermsTableName
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+      AttributeDefinitions:
+        - AttributeName: term
+          AttributeType: S
+      KeySchema:
+        - AttributeName: term
+          KeyType: HASH
+
   # -------------------------------------------------------
   # Cognito: the actual OAuth authorization server. Tokens are
   # issued and validated here -- nothing in this stack re-implements
@@ -274,6 +312,8 @@ Resources:
           MCP_SERVER_BASE_URL: !Sub "https://${SppMcpApi}.execute-api.${AWS::Region}.amazonaws.com"
           FILTER_CACHE_TABLE: !Ref SppFilterCacheTable
           SPP_BASE_OAUTH_CONFIG_KEY: !Ref SppBaseOAuthConfigKey
+          DATA_BUCKET: !Ref DataBucket
+          SPP_CONNECTED_URL: !Sub "https://${DataBucket}.s3.${AWS::Region}.amazonaws.com/static/spp-connected.html"
           # AI-initiated writes (propose_spp_write/execute_spp_write) --
           # see ai/mcpServer/sppWriteClient.js and the write-feature plan.
           SSM_PARAM_PREFIX: !Ref SSMParamPrefix

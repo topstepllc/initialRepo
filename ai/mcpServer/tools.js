@@ -18,6 +18,7 @@ const {
   performGetFieldValues,
   performExecuteQuery,
   ToolInputError,
+  getAllViewNames,
 } = require("./reportEngine.js");
 
 const sppUserAuth = require("./sppUserAuth.js");
@@ -156,7 +157,62 @@ async function doSyncSppAccess(email) {
   return { projects: ids.projects.length, users: ids.users.length };
 }
 
-function registerTools(server, connection, timings, email, hasSyncedAccess) {
+// filterScope.js keeps every table's real data under "<name>_raw" (and
+// row-scoped data under "<name>_scoped"), exposing only "<name>" -- and
+// only for tables the caller's role can read. Those internal names live in
+// the same DuckDB connection the model's SQL runs against, so without this
+// a query could name them directly and bypass both role visibility and row
+// scoping. DuckDB also volunteers them unprompted: a query against a hidden
+// table fails with "did you mean <name>_raw?", which performExecuteQuery's
+// own error handling tells the model to act on. So: reject any SQL that
+// names one, and scrub them from any error text passed back.
+function internalNamePattern() {
+  const names = getAllViewNames().flatMap((name) => [`${name}_raw`, `${name}_scoped`]);
+  if (names.length === 0) return null;
+  const escaped = names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(`\\b(${escaped.join("|")})\\b`, "gi");
+}
+
+async function executeCallerQuery(connection, sql, timings) {
+  const pattern = internalNamePattern();
+  if (pattern && pattern.test(sql)) {
+    console.log(`Rejected query: referenced an internal table name. SQL: ${sql}`);
+    throw new ToolInputError(
+      "That table is not available. Use only the table names returned by get_spp_schemas.",
+    );
+  }
+  try {
+    return await performExecuteQuery(connection, sql, timings);
+  } catch (error) {
+    if (pattern) {
+      pattern.lastIndex = 0;
+      error.message = error.message.replace(pattern, "[unavailable]");
+    }
+    throw error;
+  }
+}
+
+// get_spp_schemas' cached schema covers every table, for every caller --
+// trimmed here to just this caller's readable tables, with any "references"
+// pointing at a hidden table dropped too, so a hidden table's name never
+// reaches the model even indirectly.
+function schemaForCaller({ schema }, readableTables) {
+  const readable = new Set(readableTables);
+  const filtered = {};
+  for (const [table, columns] of Object.entries(schema)) {
+    if (!readable.has(table)) continue;
+    filtered[table] = columns.map((column) => {
+      if (column.references && !readable.has(column.references.table)) {
+        const { references, ...rest } = column;
+        return rest;
+      }
+      return column;
+    });
+  }
+  return { schema: filtered };
+}
+
+function registerTools(server, connection, timings, email, hasSyncedAccess, readableTables) {
   server.registerTool(
     "check_spp_access_status",
     {
@@ -214,12 +270,22 @@ function registerTools(server, connection, timings, email, hasSyncedAccess) {
       const url = await sppUserAuth.getSppConnectionUrl(email);
       return {
         connectionUrl: url,
+        // No "tell me when you're done" round trip: the model can't see the
+        // browser sign-in happen, but it doesn't need the user to announce
+        // it either -- sync_spp_access itself reports "not connected yet"
+        // if they haven't finished, so it's safe to just try it on their
+        // next message, whatever that message is.
         instructionsForAssistant:
           "Display this exact URL to the user as a clickable link now. Do " +
           "not say their account is connected -- it isn't yet. Tell them " +
-          "to open the link and sign in to SPP; only that step actually " +
-          "connects it. After they confirm they've done that, call " +
-          "sync_spp_access to pull in their access immediately.",
+          "to open the link and sign in to SPP, then simply continue with " +
+          "(or ask) their question -- do NOT ask them to tell you when " +
+          "they're done. On the user's next message, whatever it says, " +
+          "call sync_spp_access first, before anything else. If it " +
+          "succeeds, carry on with their request without commenting on the " +
+          "connection beyond a brief mention. If it reports they haven't " +
+          "connected yet, show this same link again and say the sign-in " +
+          "hasn't completed.",
       };
     }),
   );
@@ -231,9 +297,10 @@ function registerTools(server, connection, timings, email, hasSyncedAccess) {
       description:
         "Immediately refreshes the user's Projects/Users access from SPP, " +
         "rather than waiting for the periodic background refresh. Call " +
-        "this right after the user says they've connected their SPP " +
-        "account (via connect_spp_account), or if they report their " +
-        "access looks out of date.",
+        "this on the user's first message after connect_spp_account gave " +
+        "them a link -- without waiting for them to say they've signed " +
+        "in; if they haven't yet, this reports it. Also call it if they " +
+        "report their access looks out of date.",
       inputSchema: {},
     },
     wrapToolHandler(async () => doSyncSppAccess(email)),
@@ -245,13 +312,19 @@ function registerTools(server, connection, timings, email, hasSyncedAccess) {
       description:
         "Returns the available SuiteProjects Pro (SPP) tables and their " +
         "exact column names/types -- column names may include spaces or " +
-        "special characters requiring double-quotes in SQL. Call this once " +
+        "special characters requiring double-quotes in SQL. A column with a " +
+        "\"values\" property stores codes, not display text: \"values\" maps " +
+        "each stored code to its meaning (e.g. {\"1\": \"Not Sent\"}) -- filter " +
+        "on the code and translate it for the user; never guess what a code " +
+        "means. Call this once " +
         "before writing any query in a conversation; you do not need to " +
         "call it again on later questions unless a query fails because it " +
         "references a table/column that doesn't exist.",
       inputSchema: {},
     },
-    wrapToolHandler(async () => performGetSchemas(connection, timings)),
+    wrapToolHandler(async () =>
+      schemaForCaller(await performGetSchemas(connection, timings), readableTables),
+    ),
   );
 
   server.registerTool(
@@ -270,7 +343,17 @@ function registerTools(server, connection, timings, email, hasSyncedAccess) {
         "coded-field mappings; filter using raw values as they appear.",
       inputSchema: { table: z.string().describe("The table name, as returned by get_spp_schemas.") },
     },
-    wrapToolHandler(async ({ table }) => performGetFieldValues(connection, table)),
+    wrapToolHandler(async ({ table }) => {
+      // Checked here rather than left to performGetFieldValues, whose own
+      // "unknown table" error lists every table in the config, hidden ones
+      // included.
+      if (!readableTables.includes(table)) {
+        throw new ToolInputError(
+          `Unknown table "${table}". Must be one of: ${readableTables.join(", ")}`,
+        );
+      }
+      return performGetFieldValues(connection, table);
+    }),
   );
 
   server.registerTool(
@@ -293,12 +376,28 @@ function registerTools(server, connection, timings, email, hasSyncedAccess) {
         "-- convert or use a pattern match accordingly. A column with a " +
         "\"references\" property from get_spp_schemas is a foreign key: " +
         "join to the referenced table/column to filter or display by name " +
-        "rather than filtering the ID column against a text value. Only " +
-        "SELECT statements are permitted.",
+        "rather than filtering the ID column against a text value. The " +
+        "approvalLines table holds one row per EVENT in an approval " +
+        "workflow, not one row per approved record -- which record a row " +
+        "is about is given by whichever type-specific *_id column is " +
+        "populated (e.g. envelope_id, invoice_id, timesheet_id, " +
+        "schedule_request_id); exactly one of these is set per row, " +
+        "matching that row's record type, and every other record-type id " +
+        "column on that row is blank. Its \"action\" column marks the " +
+        "event: \"S\" is the original submission, \"P\" is a pending " +
+        "approval still owed by the user named in that row's userid, " +
+        "\"A\" is a granted approval, \"R\" is a rejection. A \"P\" row is " +
+        "never replaced once its approver acts -- it stays, with its " +
+        "pending_done field set to \"1\"; the actual outcome is recorded " +
+        "separately, as a new \"A\" or \"R\" row. So \"who still needs to " +
+        "approve schedule request 1234\" means rows where " +
+        "schedule_request_id = 1234, action = 'P', and pending_done is " +
+        "not '1' -- each such row's userid is a still-outstanding " +
+        "approver. Only SELECT statements are permitted.",
       inputSchema: { sql: z.string().describe("A single read-only SELECT statement.") },
     },
     wrapToolHandler(async ({ sql }) => {
-      const result = await performExecuteQuery(connection, sql, timings);
+      const result = await executeCallerQuery(connection, sql, timings);
       // Projects/users rows are scoped to the caller's own SPP access,
       // which looks identical to "no rows for other reasons" once you're
       // just looking at a result set -- so if they're not synced yet, say
@@ -309,8 +408,9 @@ function registerTools(server, connection, timings, email, hasSyncedAccess) {
         result.note =
           "This account's SPP connection isn't set up or hasn't synced yet " +
           "-- Projects and Users will show zero rows (by design, not a bug " +
-          "or a restrictive filter set) until connect_spp_account and " +
-          "sync_spp_access are completed. Other tables are unaffected.";
+          "or a restrictive filter set). Call sync_spp_access now; only if " +
+          "it reports they haven't connected, call connect_spp_account. " +
+          "Other tables are unaffected.";
       }
       return result;
     }),
@@ -360,7 +460,7 @@ function registerTools(server, connection, timings, email, hasSyncedAccess) {
     wrapToolHandler(async ({ term }) => deleteTerminology(term)),
   );
 
-  registerWriteTools(server, connection, email, wrapToolHandler);
+  registerWriteTools(server, connection, email, readableTables, wrapToolHandler);
 }
 
 module.exports = {

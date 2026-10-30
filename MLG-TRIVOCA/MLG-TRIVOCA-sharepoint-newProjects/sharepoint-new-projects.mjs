@@ -387,7 +387,11 @@ async function writeSharepointIdsToSpp(project, folderId, folderUrl, authObj) {
   const projectSharepointIds = {
     id: project.id,
     proj_sharepoint_folder_id__c: folderId,
-    proj_sharepoint_folder_link__c: folderUrl,
+    // SPP URL custom fields expect markdown-style "[link text](url)".
+    // Parens are percent-encoded so a ")" in the folder name can't end the link early.
+    proj_sharepoint_folder_link__c: folderUrl
+      ? `[SharePoint Folder](${folderUrl.replace(/\(/g, "%28").replace(/\)/g, "%29")})`
+      : "",
     // TEAM LOGIC DISABLED (9/21)
     // proj_sharepoint_team_id__c: teamId,
   };

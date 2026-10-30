@@ -28,7 +28,7 @@
 //   SPP_BASE_URL          e.g. https://triton-env-sb.app.sandbox.netsuitesuiteprojectspro.com/rest/v1
 //   SPP_INTEGRATION_KEY   defaults to 'spp-triton-sandbox'
 //   SPP_DEFAULT_STAGE_IDS comma-separated projectStageId list, defaults to '3'
-
+// Testing Sync to Lambda
 const TOKEN_URL = 'https://mfuzb7y7b4uwqbe25ysh4qdzie0jtxqx.lambda-url.us-east-2.on.aws/';
 const INTEGRATION_KEY = process.env.SPP_INTEGRATION_KEY || 'spp-triton-sandbox';
 const BASE_URL = process.env.SPP_BASE_URL;

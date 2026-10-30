@@ -102,7 +102,12 @@ export const handler = async (event) => {
 
       // TEAM LOGIC DISABLED (9/21) — original call also passed teamId:
       // await writeSharepointIdsToSpp(project, projectFolder.id, teamId, authObj);
-      await writeSharepointIdsToSpp(project, projectFolder.id, authObj);
+      await writeSharepointIdsToSpp(
+        project,
+        projectFolder.id,
+        projectFolder.webUrl,
+        authObj,
+      );
 
       await emailProjectOwner(project, token);
     }),
@@ -367,19 +372,22 @@ async function emailProjectOwner(project, token) {
   );
 }
 
-// Writes the newly-created SharePoint folder ID back to the project's record
-// in SPP. Call this once createFoldersInSharepoint has resolved.
+// Writes the newly-created SharePoint folder ID and folder link (webUrl from
+// the folder-create response) back to the project's record in SPP. Call this
+// once createFoldersInSharepoint has resolved.
 // TEAM LOGIC DISABLED (9/21) — original signature also accepted teamId:
 // async function writeSharepointIdsToSpp(project, folderId, teamId, authObj) {
-async function writeSharepointIdsToSpp(project, folderId, authObj) {
+async function writeSharepointIdsToSpp(project, folderId, folderUrl, authObj) {
   console.log(`WRITE--authObj: ${JSON.stringify(authObj)}`);
   // TEAM LOGIC DISABLED (9/21)
   // console.log(`WRITE--teamId: ${JSON.stringify(teamId)}`);
   console.log(`WRITE--folderId: ${JSON.stringify(folderId)}`);
+  console.log(`WRITE--folderUrl: ${JSON.stringify(folderUrl)}`);
   console.log(`WRITE--projectId: ${JSON.stringify(project.id)}`);
   const projectSharepointIds = {
     id: project.id,
     proj_sharepoint_folder_id__c: folderId,
+    proj_sharepoint_folder_link__c: folderUrl,
     // TEAM LOGIC DISABLED (9/21)
     // proj_sharepoint_team_id__c: teamId,
   };
@@ -400,7 +408,7 @@ async function writeSharepointIdsToSpp(project, folderId, authObj) {
   //   `Wrote SharePoint IDs back to SPP for "${project.name}": folder=${folderId}, team=${teamId}`,
   // );
   console.log(
-    `Wrote SharePoint folder ID back to SPP for "${project.name}": folder=${folderId}`,
+    `Wrote SharePoint folder ID and link back to SPP for "${project.name}": folder=${folderId}, link=${folderUrl}`,
   );
 
   return projectUpdate;
